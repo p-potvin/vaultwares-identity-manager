@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VaultWares — Identity Vault</title>
+</head>
+<body>
+    <div class="app" id="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-logo">
+                <svg class="sidebar-logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                </svg>
+                <div>
+                    <div class="sidebar-logo-name">VaultWares</div>
+                    <div class="sidebar-logo-sub">Identity Vault</div>
+                </div>
+            </div>
+
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-tab="identities" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                        <circle cx="12" cy="7" r="4"/>
+                    </svg>
+                    Identities
+                </button>
+                <button class="nav-item" data-tab="credentials" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                    Credentials
+                </button>
+                <button class="nav-item" data-tab="generator" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                    </svg>
+                    Generator
+                </button>
+                <button class="nav-item" data-tab="settings" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                    Settings
+                </button>
+            </nav>
+        </aside>
+
+        <!-- Main content -->
+        <main class="main-content">
+
+            <!-- IDENTITIES TAB -->
+            <div id="tab-identities" class="tab-panel active">
+                <div class="panel-header">
+                    <div>
+                        <h1 class="panel-title">Identities</h1>
+                        <p class="panel-subtitle">Manage your generated personas</p>
+                    </div>
+                    <button id="btn-new-identity" class="btn btn-primary" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        New Identity
+                    </button>
+                </div>
+                <div class="search-bar">
+                    <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <input id="search-identities" type="search" placeholder="Search identities…" class="search-input" />
+                </div>
+                <div id="identities-list" class="card-grid"></div>
+            </div>
+
+            <!-- CREDENTIALS TAB -->
+            <div id="tab-credentials" class="tab-panel">
+                <div class="panel-header">
+                    <div>
+                        <h1 class="panel-title">Credentials</h1>
+                        <p class="panel-subtitle">Saved logins for websites</p>
+                    </div>
+                    <button id="btn-new-credential" class="btn btn-primary" type="button">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Credential
+                    </button>
+                </div>
+                <div class="search-bar">
+                    <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <input id="search-credentials" type="search" placeholder="Search credentials…" class="search-input" />
+                </div>
+                <div id="credentials-list" class="card-list"></div>
+            </div>
+
+            <!-- GENERATOR TAB -->
+            <div id="tab-generator" class="tab-panel">
+                <div class="panel-header">
+                    <div>
+                        <h1 class="panel-title">Generator</h1>
+                        <p class="panel-subtitle">Create strong passwords and identities</p>
+                    </div>
+                </div>
+
+                <div class="generator-grid">
+                    <!-- Password Generator -->
+                    <div class="gen-card">
+                        <div class="gen-card-title">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                            </svg>
+                            Password Generator
+                        </div>
+
+                        <div class="pw-display-row">
+                            <input id="gen-password" class="pw-display" type="text" readonly aria-label="Generated password" />
+                            <button id="gen-copy-pw" class="btn-icon-sm" title="Copy" aria-label="Copy password">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="9" y="9" width="13" height="13" rx="2"/>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div class="strength-bar-wrap">
+                            <div id="gen-strength-bar" class="strength-bar"></div>
+                        </div>
+                        <div id="gen-strength-label" class="strength-label-sm"></div>
+
+                        <div class="pw-options">
+                            <div class="pw-option-row">
+                                <label class="pw-opt-label" for="pw-length">Length: <span id="pw-length-val">16</span></label>
+                                <input id="pw-length" type="range" min="8" max="64" value="16" class="slider" />
+                            </div>
+                            <div class="checkbox-grid">
+                                <label class="checkbox-label"><input type="checkbox" id="pw-upper" checked /> Uppercase (A–Z)</label>
+                                <label class="checkbox-label"><input type="checkbox" id="pw-lower" checked /> Lowercase (a–z)</label>
+                                <label class="checkbox-label"><input type="checkbox" id="pw-numbers" checked /> Numbers (0–9)</label>
+                                <label class="checkbox-label"><input type="checkbox" id="pw-symbols" checked /> Symbols (!@#…)</label>
+                            </div>
+                        </div>
+
+                        <button id="gen-refresh-pw" class="btn btn-primary btn-full" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                            </svg>
+                            Generate Password
+                        </button>
+                    </div>
+
+                    <!-- Identity Generator -->
+                    <div class="gen-card">
+                        <div class="gen-card-title">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                                <circle cx="12" cy="7" r="4"/>
+                            </svg>
+                            Identity Generator
+                        </div>
+
+                        <div id="identity-preview" class="identity-preview">
+                            <div class="identity-preview-empty">Click generate to create a new identity</div>
+                        </div>
+
+                        <button id="gen-identity" class="btn btn-primary btn-full" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="23 4 23 10 17 10"/>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+                            </svg>
+                            Generate &amp; Save Identity
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SETTINGS TAB -->
+            <div id="tab-settings" class="tab-panel">
+                <div class="panel-header">
+                    <div>
+                        <h1 class="panel-title">Settings</h1>
+                        <p class="panel-subtitle">Customize your vault preferences</p>
+                    </div>
+                </div>
+
+                <div class="settings-form">
+                    <div class="setting-group">
+                        <h3 class="setting-group-title">Appearance</h3>
+                        <div class="setting-row">
+                            <label class="setting-label" for="setting-theme">
+                                <span>Theme</span>
+                                <span class="setting-desc">Choose light or dark mode</span>
+                            </label>
+                            <select id="setting-theme" class="setting-select">
+                                <option value="dark">Dark</option>
+                                <option value="light">Light</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3 class="setting-group-title">Automation</h3>
+                        <div class="setting-row">
+                            <label class="setting-label" for="setting-autodetect">
+                                <span>Auto-detect sign-up forms</span>
+                                <span class="setting-desc">Show fill prompt when a registration form is found</span>
+                            </label>
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-autodetect" />
+                                <span class="toggle-track"></span>
+                            </label>
+                        </div>
+                        <div class="setting-row">
+                            <label class="setting-label" for="setting-autofill">
+                                <span>Auto-fill without prompt</span>
+                                <span class="setting-desc">Fill forms automatically without showing a toast</span>
+                            </label>
+                            <label class="toggle">
+                                <input type="checkbox" id="setting-autofill" />
+                                <span class="toggle-track"></span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="setting-group">
+                        <h3 class="setting-group-title">Password Defaults</h3>
+                        <div class="setting-row">
+                            <label class="setting-label" for="setting-pw-length">
+                                <span>Default length: <span id="setting-pw-length-val">16</span></span>
+                                <span class="setting-desc">Number of characters in generated passwords</span>
+                            </label>
+                            <input id="setting-pw-length" type="range" min="8" max="64" value="16" class="slider slider-wide" />
+                        </div>
+                        <div class="setting-row">
+                            <label class="setting-label" for="setting-complexity">
+                                <span>Complexity preset</span>
+                                <span class="setting-desc">Minimum requirements for generated passwords</span>
+                            </label>
+                            <select id="setting-complexity" class="setting-select">
+                                <option value="medium">Medium (letters + numbers)</option>
+                                <option value="high">High (+ symbols)</option>
+                                <option value="maximum" selected>Maximum (all, 16+ chars)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <button id="btn-save-settings" class="btn btn-primary" type="button">Save Settings</button>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Identity Modal -->
+    <div id="modal-backdrop" class="modal-backdrop hidden" aria-hidden="true">
+        <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+            <div class="modal-header">
+                <h2 id="modal-title" class="modal-title">Identity Details</h2>
+                <button id="modal-close" class="btn-icon-sm" type="button" aria-label="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div id="modal-body" class="modal-body"></div>
+            <div class="modal-footer">
+                <button id="modal-delete" class="btn btn-danger" type="button">Delete</button>
+                <button id="modal-close-btn" class="btn btn-ghost" type="button">Close</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

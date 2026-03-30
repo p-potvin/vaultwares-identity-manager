@@ -1,0 +1,283 @@
+/* ================================================================
+   VaultWares Auto-Signup — Popup Styles
+   ================================================================ */
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+:root {
+    --bg: #1e2428;
+    --bg-surface: #272d32;
+    --bg-hover: #2f373d;
+    --border: rgba(255, 255, 255, 0.08);
+    --gold: #cc9b21;
+    --gold-light: #d9aa35;
+    --cyan: #21b8cc;
+    --text: #d9dfe3;
+    --text-muted: #8a9299;
+    --text-dim: #5c666e;
+    --radius: 10px;
+    --radius-sm: 7px;
+}
+
+body {
+    width: 320px;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 13.5px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Header */
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.logo-icon {
+    width: 22px;
+    height: 22px;
+    color: var(--gold);
+}
+
+.logo-text {
+    font-size: 14.5px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    background: linear-gradient(90deg, var(--gold), var(--cyan));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+main {
+    padding: 14px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+/* Detection Banner */
+.banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+    border: 1px solid transparent;
+    transition: opacity 0.2s;
+}
+
+.banner-hidden {
+    display: none;
+}
+
+.banner-detected {
+    background: rgba(204, 155, 33, 0.12);
+    border-color: rgba(204, 155, 33, 0.3);
+    color: #e8c96a;
+}
+
+.banner-none {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--border);
+    color: var(--text-muted);
+}
+
+.banner-icon {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
+.banner-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* Action Buttons */
+.actions {
+    display: flex;
+    gap: 8px;
+}
+
+.btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: background 0.15s, transform 0.1s;
+}
+
+.btn:active {
+    transform: scale(0.97);
+}
+
+.btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+.btn-primary {
+    background: var(--gold);
+    color: #1a1f23;
+}
+
+.btn-primary:hover {
+    background: var(--gold-light);
+}
+
+.btn-primary:disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.btn-secondary {
+    background: var(--bg-surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+    background: var(--bg-hover);
+}
+
+.btn-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+}
+
+.btn-icon:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
+.btn-icon svg {
+    width: 15px;
+    height: 15px;
+}
+
+/* Password section */
+.section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+.password-section {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+}
+
+.password-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.password-input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12px;
+    padding: 6px 10px;
+    outline: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.strength-bar-wrap {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 5px;
+}
+
+.strength-bar {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.3s ease, background 0.3s ease;
+    width: 0;
+}
+
+.strength-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: right;
+}
+
+/* Stats */
+.stats-row {
+    display: flex;
+    gap: 8px;
+}
+
+.stat-card {
+    flex: 1;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+}
+
+.stat-value {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--gold);
+    line-height: 1.1;
+}
+
+.stat-label {
+    font-size: 11px;
+    color: var(--text-muted);
+}
