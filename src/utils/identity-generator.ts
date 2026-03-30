@@ -101,8 +101,17 @@ const EMAIL_DOMAINS = [
     'icloud.com', 'hotmail.com', 'mail.com',
 ];
 
-const randomInt = (max: number): number =>
-    Math.floor(crypto.getRandomValues(new Uint32Array(1))[0]! / (0xffffffff + 1) * max);
+const randomInt = (max: number): number => {
+    const array = new Uint32Array(1);
+    let r: number;
+
+    do {
+        crypto.getRandomValues(array);
+        r = array[0]!;
+    } while (r >= Math.floor(0xffffffff / max) * max);
+
+    return r % max;
+};
 
 const pick = <T>(arr: T[]): T => arr[randomInt(arr.length)]!;
 

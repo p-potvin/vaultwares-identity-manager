@@ -30,7 +30,17 @@ const STRENGTH_COLORS = ['#e05555', '#e07b30', '#d9b830', '#7ec86e', '#21b8cc'];
    State
    ==================================================================== */
 
-let vault: VaultData = { identities: [], credentials: [], settings: { theme: 'dark', autoDetect: true, autoFill: false, passwordLength: 16, passwordComplexity: 'maximum' } };
+let vault: VaultData = {
+    identities: [],
+    credentials: [],
+    settings: {
+        theme: 'dark',
+        autoDetect: true,
+        autoFill: false,
+        passwordLength: 16,
+        passwordComplexity: 'maximum',
+    },
+};
 let activeTab = 'identities';
 let identitySearchQuery = '';
 let credentialSearchQuery = '';
