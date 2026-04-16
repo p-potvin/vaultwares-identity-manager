@@ -1,5 +1,5 @@
 import './popup.css';
-import type { Identity, Message, MessageResponse, VaultData, VaultSettings } from '../types';
+import type { Identity, Message, MessageResponse, VaultData, VaultSettings, VaultSkin } from '../types';
 import { generatePassword, measurePasswordStrength, strengthLabel } from '../utils/password-generator';
 
 const send = <T>(msg: Message): Promise<MessageResponse & { data?: T }> =>
@@ -48,6 +48,10 @@ const openVault = (): void => {
     window.close();
 };
 
+const applySkin = (skin: VaultSkin): void => {
+    document.documentElement.setAttribute('data-skin', skin);
+};
+
 const loadVaultStats = async (): Promise<void> => {
     const resp = await send<VaultData>({ type: 'GET_VAULT' });
     const vault = resp.data;
@@ -57,6 +61,8 @@ const loadVaultStats = async (): Promise<void> => {
 
     if (si) si.textContent = String(vault?.identities.length ?? 0);
     if (sc) sc.textContent = String(vault?.credentials.length ?? 0);
+
+    if (vault?.settings.skin) applySkin(vault.settings.skin);
 };
 
 const checkCurrentPage = async (): Promise<void> => {

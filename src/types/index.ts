@@ -33,8 +33,11 @@ export interface Credential {
     updatedAt: number;
 }
 
+/** Visual skin applied to the extension UI. */
+export type VaultSkin = 'slate' | 'cinder' | 'mist';
+
 export interface VaultSettings {
-    theme: 'dark' | 'light';
+    skin: VaultSkin;
     autoDetect: boolean;
     autoFill: boolean;
     defaultIdentityId?: string;
@@ -107,4 +110,25 @@ export interface GeneratePasswordOptions {
     lowercase: boolean;
     numbers: boolean;
     symbols: boolean;
+}
+
+/** Normalised metadata about a domain used to drive login/sign-up suggestions. */
+export interface DomainProfile {
+    domainProfileId: string;
+    normalizedDomain: string;
+    displayDomain: string;
+    siteName: string;
+    lastSeenAt: number;
+}
+
+export type DomainLinkType = 'preferred-login' | 'prior-signup' | 'suggested-identity';
+
+/** Links a vault item (identity or credential) to a specific domain. */
+export interface DomainIdentityLink {
+    domainIdentityLinkId: string;
+    normalizedDomain: string;
+    vaultItemId: string;
+    linkType: DomainLinkType;
+    confidenceScore: number;
+    lastUsedAt: number;
 }

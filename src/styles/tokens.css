@@ -1,0 +1,130 @@
+/* ================================================================
+   VaultWares Identity Manager — Semantic Design Token Layer
+   ================================================================
+   Skin attribute: data-skin="slate|cinder|mist" on <html>
+   Default (no attribute): Golden Slate (dark, gold accent)
+   ================================================================ */
+
+/* ----------------------------------------------------------------
+   Semantic token definitions
+   ----------------------------------------------------------------
+   bg-app              page background
+   bg-surface          panel / sidebar / card surface
+   bg-surface-elevated raised card surface (slightly lighter)
+   bg-hover            interactive hover fill
+   border-subtle       default separator / card border
+   border-strong       stronger border for focused elements
+   text-primary        primary readable text
+   text-secondary      muted / descriptive text
+   text-tertiary       very dim / placeholder text
+   accent-primary      main action colour (button, link, active nav)
+   accent-hover        accent on hover
+   accent-dim          tinted accent background (chip, badge fill)
+   accent-secondary    supporting accent (success icon, secondary CTA)
+   accent-secondary-dim tinted secondary-accent background
+   focus-ring          keyboard focus outline colour
+   logo-start          logo gradient start colour
+   logo-end            logo gradient end colour
+   status-success      positive / verified state
+   status-warning      caution state
+   status-danger       destructive / error state
+   status-danger-dim   tinted danger background
+   suggest-signup      signup-detection highlight
+   suggest-login       login-detection highlight
+   trust-verified      encryption / verified cue
+   trust-caution       recovery / sensitive-action cue
+   ---------------------------------------------------------------- */
+
+/* ----------------------------------------------------------------
+   Golden Slate — dark, dark gray-blue base, gold accent (default)
+   ---------------------------------------------------------------- */
+:root,
+[data-skin='slate'] {
+    --bg-app:               #181c1f;
+    --bg-surface:           #1e2428;
+    --bg-surface-elevated:  #22282d;
+    --bg-hover:             #282f35;
+    --border-subtle:        rgba(255, 255, 255, 0.07);
+    --border-strong:        rgba(255, 255, 255, 0.13);
+    --text-primary:         #d9dfe3;
+    --text-secondary:       #8a9299;
+    --text-tertiary:        #4e5c63;
+    --accent-primary:       #cc9b21;
+    --accent-hover:         #d9aa35;
+    --accent-dim:           rgba(204, 155, 33, 0.18);
+    --accent-secondary:     #21b8cc;
+    --accent-secondary-dim: rgba(33, 184, 204, 0.18);
+    --focus-ring:           #cc9b21;
+    --logo-start:           #cc9b21;
+    --logo-end:             #21b8cc;
+    --status-success:       #7ec86e;
+    --status-warning:       #d9b830;
+    --status-danger:        #e05555;
+    --status-danger-dim:    rgba(224, 85, 85, 0.15);
+    --suggest-signup:       #cc9b21;
+    --suggest-login:        #21b8cc;
+    --trust-verified:       #7ec86e;
+    --trust-caution:        #d9b830;
+}
+
+/* ----------------------------------------------------------------
+   Cyberpunk Cinder — dark, muted blue-gray base, warm orange accent
+   ---------------------------------------------------------------- */
+[data-skin='cinder'] {
+    --bg-app:               #1a1e22;
+    --bg-surface:           #22282d;
+    --bg-surface-elevated:  #272f36;
+    --bg-hover:             #2e3840;
+    --border-subtle:        rgba(255, 255, 255, 0.07);
+    --border-strong:        rgba(255, 255, 255, 0.13);
+    --text-primary:         #e0ddd8;
+    --text-secondary:       #9a9590;
+    --text-tertiary:        #5c5852;
+    --accent-primary:       #e07b30;
+    --accent-hover:         #e8903f;
+    --accent-dim:           rgba(224, 123, 48, 0.18);
+    --accent-secondary:     #cc9b21;
+    --accent-secondary-dim: rgba(204, 155, 33, 0.15);
+    --focus-ring:           #e07b30;
+    --logo-start:           #e07b30;
+    --logo-end:             #cc9b21;
+    --status-success:       #7ec86e;
+    --status-warning:       #d9b830;
+    --status-danger:        #e05555;
+    --status-danger-dim:    rgba(224, 85, 85, 0.15);
+    --suggest-signup:       #e07b30;
+    --suggest-login:        #21b8cc;
+    --trust-verified:       #7ec86e;
+    --trust-caution:        #d9b830;
+}
+
+/* ----------------------------------------------------------------
+   Ocean Mist — light, soft white base, deep sea blue accent
+   ---------------------------------------------------------------- */
+[data-skin='mist'] {
+    --bg-app:               #f2f5f7;
+    --bg-surface:           #ffffff;
+    --bg-surface-elevated:  #f7f9fa;
+    --bg-hover:             #edf0f2;
+    --border-subtle:        rgba(0, 0, 0, 0.08);
+    --border-strong:        rgba(0, 0, 0, 0.14);
+    --text-primary:         #1a2226;
+    --text-secondary:       #607079;
+    --text-tertiary:        #9aabb3;
+    --accent-primary:       #1565c0;
+    --accent-hover:         #1976d2;
+    --accent-dim:           rgba(21, 101, 192, 0.12);
+    --accent-secondary:     #0097a7;
+    --accent-secondary-dim: rgba(0, 151, 167, 0.12);
+    --focus-ring:           #1565c0;
+    --logo-start:           #1565c0;
+    --logo-end:             #0097a7;
+    --status-success:       #388e3c;
+    --status-warning:       #f57c00;
+    --status-danger:        #d32f2f;
+    --status-danger-dim:    rgba(211, 47, 47, 0.12);
+    --suggest-signup:       #1565c0;
+    --suggest-login:        #0097a7;
+    --trust-verified:       #388e3c;
+    --trust-caution:        #f57c00;
+}
