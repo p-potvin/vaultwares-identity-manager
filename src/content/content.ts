@@ -20,12 +20,15 @@ const removeToast = (): void => {
     toastVisible = false;
 };
 
+const escText = (s: string): string =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
 const showToast = (): void => {
     if (toastVisible || document.getElementById(TOAST_ID)) return;
 
     toastVisible = true;
 
-    const domain = normalizeDomain(location.href);
+    const domain = escText(normalizeDomain(location.href));
 
     const toast = document.createElement('div');
     toast.id = TOAST_ID;

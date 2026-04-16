@@ -56,8 +56,8 @@ export const normalizeDomain = (input: string): string => {
 
     if (parts.length <= 2) return hostname;
 
-    const subdomain = parts[0] ?? '';
-    if (STRIP_SUBDOMAINS.has(subdomain)) {
+    const subdomain = parts[0];
+    if (subdomain !== undefined && STRIP_SUBDOMAINS.has(subdomain)) {
         return parts.slice(1).join('.');
     }
 
