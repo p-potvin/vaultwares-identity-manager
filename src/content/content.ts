@@ -3,6 +3,7 @@ import type { Identity, Message, MessageResponse, VaultSettings } from '../types
 import { detectSignupForm } from '../utils/form-detector';
 import { fillForm } from '../utils/form-filler';
 import { generatePassword } from '../utils/password-generator';
+import { normalizeDomain } from '../utils/domain';
 
 const TOAST_ID = 'vw-autosignup-toast';
 const FILL_BTN_ID = 'vw-autosignup-fill-btn';
@@ -19,10 +20,15 @@ const removeToast = (): void => {
     toastVisible = false;
 };
 
+const escText = (s: string): string =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
 const showToast = (): void => {
     if (toastVisible || document.getElementById(TOAST_ID)) return;
 
     toastVisible = true;
+
+    const domain = escText(normalizeDomain(location.href));
 
     const toast = document.createElement('div');
     toast.id = TOAST_ID;
@@ -36,7 +42,7 @@ const showToast = (): void => {
     </div>
     <div class="vw-toast-content">
       <span class="vw-toast-title">Sign-up form detected</span>
-      <span class="vw-toast-subtitle">VaultWares can fill it for you</span>
+      <span class="vw-toast-subtitle">Generate a fictional identity for ${domain}</span>
     </div>
     <button id="${FILL_BTN_ID}" class="vw-toast-btn vw-toast-btn-primary" type="button">Auto-fill</button>
     <button id="${DISMISS_BTN_ID}" class="vw-toast-btn vw-toast-btn-ghost" type="button" aria-label="Dismiss">✕</button>
@@ -130,8 +136,8 @@ const showSuccessToast = (identity: Identity, password: string): void => {
 
     const credential = {
         id: crypto.randomUUID(),
-        siteUrl: location.hostname,
-        siteName: document.title || location.hostname,
+        siteUrl: normalizeDomain(location.href),
+        siteName: document.title || normalizeDomain(location.href),
         username: identity.username,
         email: identity.email,
         password,

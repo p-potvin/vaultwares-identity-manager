@@ -4,6 +4,7 @@ import type {
     Credential,
     VaultData,
     VaultSettings,
+    VaultSkin,
     Message,
     MessageResponse,
 } from '../types';
@@ -34,7 +35,7 @@ let vault: VaultData = {
     identities: [],
     credentials: [],
     settings: {
-        theme: 'dark',
+        skin: 'slate',
         autoDetect: true,
         autoFill: false,
         passwordLength: 16,
@@ -335,38 +336,38 @@ const closeModal = (): void => {
 const loadSettings = (): void => {
     const s = vault.settings;
 
-    const themeEl = $<HTMLSelectElement>('setting-theme');
+    const skinEl = $<HTMLSelectElement>('setting-skin');
     const autoDetEl = $<HTMLInputElement>('setting-autodetect');
     const autoFillEl = $<HTMLInputElement>('setting-autofill');
     const pwLenEl = $<HTMLInputElement>('setting-pw-length');
     const pwLenValEl = $<HTMLSpanElement>('setting-pw-length-val');
     const complexEl = $<HTMLSelectElement>('setting-complexity');
 
-    if (themeEl) themeEl.value = s.theme;
+    if (skinEl) skinEl.value = s.skin;
     if (autoDetEl) autoDetEl.checked = s.autoDetect;
     if (autoFillEl) autoFillEl.checked = s.autoFill;
     if (pwLenEl) pwLenEl.value = String(s.passwordLength);
     if (pwLenValEl) pwLenValEl.textContent = String(s.passwordLength);
     if (complexEl) complexEl.value = s.passwordComplexity;
 
-    applyTheme(s.theme);
+    applySkin(s.skin);
 };
 
-const applyTheme = (theme: 'dark' | 'light'): void => {
-    document.documentElement.setAttribute('data-theme', theme);
+const applySkin = (skin: VaultSkin): void => {
+    document.documentElement.setAttribute('data-skin', skin);
 };
 
 const saveSettings = async (): Promise<void> => {
-    const theme = ($<HTMLSelectElement>('setting-theme')?.value ?? 'dark') as 'dark' | 'light';
+    const skin = ($<HTMLSelectElement>('setting-skin')?.value ?? 'slate') as VaultSkin;
     const autoDetect = $<HTMLInputElement>('setting-autodetect')?.checked ?? true;
     const autoFill = $<HTMLInputElement>('setting-autofill')?.checked ?? false;
     const passwordLength = parseInt($<HTMLInputElement>('setting-pw-length')?.value ?? '16', 10);
     const passwordComplexity = ($<HTMLSelectElement>('setting-complexity')?.value ?? 'maximum') as VaultSettings['passwordComplexity'];
 
-    const updated: Partial<VaultSettings> = { theme, autoDetect, autoFill, passwordLength, passwordComplexity };
+    const updated: Partial<VaultSettings> = { skin, autoDetect, autoFill, passwordLength, passwordComplexity };
     await send({ type: 'UPDATE_SETTINGS', payload: updated });
     vault.settings = { ...vault.settings, ...updated };
-    applyTheme(theme);
+    applySkin(skin);
 };
 
 /* ====================================================================
@@ -380,7 +381,7 @@ const init = async (): Promise<void> => {
     const resp = await send<VaultData>({ type: 'GET_VAULT' });
     if (resp.data) vault = resp.data;
 
-    applyTheme(vault.settings.theme);
+    applySkin(vault.settings.skin);
     renderIdentities();
     renderCredentials();
     loadSettings();

@@ -1,7 +1,7 @@
 import type { VaultData, Identity, Credential, VaultSettings } from '../types';
 
 const DEFAULT_SETTINGS: VaultSettings = {
-    theme: 'dark',
+    skin: 'slate',
     autoDetect: true,
     autoFill: false,
     passwordLength: 16,
