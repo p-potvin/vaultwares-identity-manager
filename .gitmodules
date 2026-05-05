@@ -2,3 +2,6 @@
 	path = vault-themes
 	url = https://github.com/p-potvin/vault-themes
 	branch = main
+[submodule "vaultwares-agentciation"]
+	path = vaultwares-agentciation
+	url = https://github.com/p-potvin/vaultwares-agentciation
