@@ -1,5 +1,5 @@
 {
-    "name": "vaultwares-auto-signup",
+    "name": "vaultwares-identity-manager",
     "version": "1.0.0",
     "description": "VaultWares identity vault and auto-signup Chrome extension",
     "private": true,

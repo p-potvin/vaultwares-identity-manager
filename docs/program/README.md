@@ -73,7 +73,7 @@ Planned sibling repos/services:
   - Android app + AutofillService
 - `vaultwares-pipelines`
   - AI generation and artifact orchestration backend
-- `vaultwares-v1`
+- `vaultwares-website`
   - public marketing site to be revamped later
 
 ## Release Order
@@ -101,7 +101,7 @@ Planned sibling repos/services:
 
 - complete deferred commercial and growth research
 - decide future payment, telecom, IP, pricing, and marketing direction
-- revamp `vaultwares-v1`
+- revamp `vaultwares-website`
 
 ## Document Index
 

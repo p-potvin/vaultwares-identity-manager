@@ -1,8 +1,8 @@
-# auto-signup — Agent Manifest
+# vaultwares-identity-manager — Agent Manifest
 
-**Project:** auto-signup  
+**Project:** vaultwares-identity-manager  
 **Organization:** VaultWares  
-**Description:** Automated sign-up tooling for VaultWares applications.
+**Description:** Identity vault and auto-signup Chrome extension.
 
 ## Submodules
 

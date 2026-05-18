@@ -2,7 +2,7 @@
 
 ## Objective
 
-Prepare a future redesign brief for `vaultwares-v1` so the public site can later reflect the Identity Manager product accurately and credibly.
+Prepare a future redesign brief for `vaultwares-website` so the public site can later reflect the Identity Manager product accurately and credibly.
 
 ## This Phase
 

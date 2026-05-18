@@ -24,7 +24,7 @@ No implementation should start from this epic until the legal entity, budget, an
 - pricing and packaging memo
 - marketing/publicity strategy memo
 - SEO/content plan
-- `vaultwares-v1` redesign brief and IA proposal
+- `vaultwares-website` redesign brief and IA proposal
 
 ## Workstreams
 
@@ -70,7 +70,7 @@ No implementation should start from this epic until the legal entity, budget, an
 
 ### 7. Website Revamp
 
-- review `vaultwares-v1`
+- review `vaultwares-website`
 - define new information architecture
 - define conversion funnels, landing-page narrative, and feature-page strategy
 - define what assets and screenshots the future site needs from product UX work
@@ -83,7 +83,7 @@ No implementation should start from this epic until the legal entity, budget, an
 - issue seed: pricing and packaging framework memo
 - issue seed: marketing and launch strategy memo
 - issue seed: SEO/content plan
-- issue seed: `vaultwares-v1` redesign brief and IA proposal
+- issue seed: `vaultwares-website` redesign brief and IA proposal
 
 ## Dependencies
 

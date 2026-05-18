@@ -1,8 +1,8 @@
-# auto-signup
+# vaultwares-identity-manager
 
 > A **VaultWares** project.
 
-Automated sign-up tooling for VaultWares applications.
+Identity vault and auto-signup Chrome extension. Detects sign-up forms and fills them with generated identities and strong passwords.
 
 ## Program Documentation
 

@@ -1,6 +1,6 @@
 {
     "manifest_version": 3,
-    "name": "VaultWares — Auto-Signup",
+    "name": "VaultWares — Identity Manager",
     "version": "1.0.0",
     "description": "Detect sign-up forms and fill them with generated identities and strong passwords. Includes a full identity & password vault.",
     "permissions": [

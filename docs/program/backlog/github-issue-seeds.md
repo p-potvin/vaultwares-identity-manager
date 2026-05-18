@@ -95,5 +95,5 @@ This file converts the epic pack into issue-ready backlog seeds for later import
    - labels: `epic`, `research`
 6. Define SEO/content plan
    - labels: `epic`, `research`
-7. Create `vaultwares-v1` revamp brief and information architecture proposal
+7. Create `vaultwares-website` revamp brief and information architecture proposal
    - labels: `epic`, `research`, `branding`
