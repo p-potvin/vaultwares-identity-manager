@@ -17,7 +17,7 @@ Start here:
 
 ## VaultWares Branding
 
-This project uses [vault-themes](https://github.com/p-potvin/vault-themes) — the centralized VaultWares theme library — included here as a git submodule under `vault-themes/`.
+This project uses [vaultwares-themes](https://github.com/p-potvin/vaultwares-themes) — the centralized VaultWares theme library — included here as a git submodule under `vaultwares-themes/`.
 
 ## Getting Started
 

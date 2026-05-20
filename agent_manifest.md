@@ -8,4 +8,4 @@
 
 | Path | Repository | Branch |
 |------|-----------|--------|
-| `vault-themes/` | https://github.com/p-potvin/vault-themes | main |
+| `vaultwares-themes/` | https://github.com/p-potvin/vaultwares-themes | main |
