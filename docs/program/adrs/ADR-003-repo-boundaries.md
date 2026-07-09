@@ -29,7 +29,7 @@ Use `vaultwares-identity-manager` as the temporary program anchor and planning h
 ### Shared Upstream Dependencies
 
 - `vault-themes` remains the theme/token source of truth
-- `vaultwares-pipelines` becomes the shared AI orchestration platform
+- `vaultwares-api` becomes the shared AI orchestration platform
 
 ## Consequences
 

@@ -44,11 +44,13 @@ export interface VaultEnvelope {
         iconRef?: string;
         tags: string[];
         favorite: boolean;
+        identityId?: string | null;
     };
     signature: string;
     createdAt: string;
     updatedAt: string;
     authorDeviceId: string;
+    lastUsedAt?: string | null;
 }
 
 export interface EncryptedVaultItem {

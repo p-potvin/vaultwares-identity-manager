@@ -59,10 +59,12 @@ export interface VaultItem {
     itemType: ItemType;
     data: VaultItemData;
     metadata: VaultItemMetadata;
+    identityId: string | null;
     createdAt: string;
     updatedAt: string;
     authorDeviceId: string;
     deletedAt: string | null;
+    lastUsedAt: string | null;
 }
 
 export interface VaultSettings {
@@ -71,6 +73,10 @@ export interface VaultSettings {
     autoDetectEnabled: boolean;
     defaultPasswordLength: number;
     defaultPasswordComplexity: 'medium' | 'high' | 'maximum';
+    defaultGeneratorPreset: string;
+    vaultSectionName: string;
+    generationEndpointUrl: string;
+    autoAssignItemsToIdentity: boolean;
 }
 
 export const DEFAULT_SETTINGS: VaultSettings = {
@@ -79,4 +85,8 @@ export const DEFAULT_SETTINGS: VaultSettings = {
     autoDetectEnabled: true,
     defaultPasswordLength: 20,
     defaultPasswordComplexity: 'maximum',
+    defaultGeneratorPreset: 'classic',
+    vaultSectionName: 'Vault',
+    generationEndpointUrl: '',
+    autoAssignItemsToIdentity: true,
 };

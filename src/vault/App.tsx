@@ -2,10 +2,11 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
     Shield, Lock, Search, Plus, Key, CreditCard, MapPin, Clock, Fingerprint,
     Settings, RefreshCw, Trash2, X, Copy, Eye, EyeOff, Check, Loader2,
-    Download, Monitor, ChevronRight, Star, AlertCircle
+    Download, Monitor, ChevronRight, Star, AlertCircle, Users, User, Sparkles
 } from 'lucide-react';
-import type { VaultItem, ItemType, VaultSettings, LoginItem, AddressItem, CardItem, TotpItem, PasskeyItem } from '../types';
-import { generatePassword, measurePasswordStrength, strengthLabel, strengthColor } from '../utils/password-generator';
+import type { VaultItem, ItemType, VaultSettings, LoginItem, AddressItem, CardItem, TotpItem, PasskeyItem, Identity, GeneratedIdentityData } from '../types';
+import { DEFAULT_SETTINGS } from '../types';
+import { generatePassword, generatePassphrase, generateToken, generateFromPreset, measurePasswordStrength, strengthLabel, strengthColor, PRESETS, type GeneratorPreset, type PasswordOptions, type PassphraseOptions } from '../utils/password-generator';
 import { generateTotpCode, getTotpRemainingSeconds } from '../utils/totp';
 import { normalizeDomain, getFaviconUrl, getInitials } from '../utils/domain';
 
@@ -13,7 +14,7 @@ function send<T>(msg: { type: string; payload?: any }): Promise<{ success: boole
     return chrome.runtime.sendMessage(msg);
 }
 
-type Tab = 'all' | 'logins' | 'addresses' | 'cards' | 'totp' | 'passkeys' | 'generator' | 'settings' | 'devices';
+type Tab = 'identities' | 'all' | 'logins' | 'addresses' | 'cards' | 'totp' | 'passkeys' | 'generator' | 'settings' | 'devices';
 
 const ITEM_TYPE_CONFIG: Record<ItemType, { label: string; icon: React.ReactNode; color: string }> = {
     login: { label: 'Login', icon: <Key className="w-4 h-4" />, color: 'text-vw-gold' },
@@ -29,12 +30,18 @@ export default function App() {
     const [pin, setPin] = useState('');
     const [error, setError] = useState('');
     const [items, setItems] = useState<VaultItem[]>([]);
-    const [tab, setTab] = useState<Tab>('all');
+    const [identities, setIdentities] = useState<Identity[]>([]);
+    const [tab, setTab] = useState<Tab>('identities');
     const [search, setSearch] = useState('');
     const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
     const [creatingType, setCreatingType] = useState<ItemType | null>(null);
+    const [showTypeSelector, setShowTypeSelector] = useState(false);
+    const [prefillUrl, setPrefillUrl] = useState('');
     const [settings, setSettings] = useState<VaultSettings | null>(null);
     const [loading, setLoading] = useState(false);
+    const [selectedIdentity, setSelectedIdentity] = useState<Identity | null>(null);
+    const [generatingIdentity, setGeneratingIdentity] = useState(false);
+    const [identityEditor, setIdentityEditor] = useState<GeneratedIdentityData | null>(null);
 
     const checkInit = useCallback(async () => {
         const resp = await send<{ initialized: boolean }>({ type: 'INIT_CHECK' });
@@ -51,6 +58,11 @@ export default function App() {
         if (resp.success && resp.data) setItems(resp.data);
     }, []);
 
+    const loadIdentities = useCallback(async () => {
+        const resp = await send<Identity[]>({ type: 'GET_IDENTITIES' });
+        if (resp.success && resp.data) setIdentities(resp.data);
+    }, []);
+
     const loadSettings = useCallback(async () => {
         const resp = await send<VaultSettings>({ type: 'GET_SETTINGS' });
         if (resp.success && resp.data) setSettings(resp.data);
@@ -64,9 +76,18 @@ export default function App() {
     useEffect(() => {
         if (unlocked) {
             loadItems();
+            loadIdentities();
             loadSettings();
+            const params = new URLSearchParams(window.location.search);
+            if (params.get('action') === 'create') {
+                const url = params.get('url') || '';
+                if (url) {
+                    setCreatingType('login');
+                    setPrefillUrl(url);
+                }
+            }
         }
-    }, [unlocked, loadItems, loadSettings]);
+    }, [unlocked, loadItems, loadIdentities, loadSettings]);
 
     const handleUnlock = async () => {
         setLoading(true);
@@ -92,6 +113,7 @@ export default function App() {
         await send({ type: 'SYNC' });
         setLoading(false);
         await loadItems();
+        await loadIdentities();
     };
 
     const handleSaveItem = async (itemType: ItemType, data: any, metadata: any, id?: string) => {
@@ -108,6 +130,39 @@ export default function App() {
     const handleDeleteItem = async (id: string) => {
         await send({ type: 'DELETE_ITEM', payload: { id } });
         setEditingItem(null);
+        await loadItems();
+    };
+
+    const handleGenerateIdentity = async () => {
+        setGeneratingIdentity(true);
+        const resp = await send<GeneratedIdentityData>({ type: 'GENERATE_IDENTITY' });
+        setGeneratingIdentity(false);
+        if (resp.success && resp.data) {
+            setIdentityEditor(resp.data);
+        }
+    };
+
+    const handleSaveIdentity = async (data: GeneratedIdentityData) => {
+        const resp = await send<Identity>({ type: 'CREATE_IDENTITY', payload: { data } });
+        setIdentityEditor(null);
+        if (resp.success) {
+            await loadIdentities();
+        }
+    };
+
+    const handleDeleteIdentity = async (id: string) => {
+        await send({ type: 'DELETE_IDENTITY', payload: { id } });
+        setSelectedIdentity(null);
+        await loadIdentities();
+    };
+
+    const handleAssignItem = async (itemId: string, identityId: string) => {
+        await send({ type: 'ASSIGN_ITEM_TO_IDENTITY', payload: { itemId, identityId } });
+        await loadItems();
+    };
+
+    const handleUnassignItem = async (itemId: string) => {
+        await send({ type: 'UNASSIGN_ITEM_FROM_IDENTITY', payload: { itemId } });
         await loadItems();
     };
 
@@ -190,7 +245,8 @@ export default function App() {
     });
 
     const navItems: { tab: Tab; label: string; icon: React.ReactNode }[] = [
-        { tab: 'all', label: 'All Items', icon: <Shield className="w-4 h-4" /> },
+        { tab: 'identities', label: 'Identities', icon: <Users className="w-4 h-4" /> },
+        { tab: 'all', label: settings?.vaultSectionName ?? 'Vault', icon: <Shield className="w-4 h-4" /> },
         { tab: 'logins', label: 'Logins', icon: <Key className="w-4 h-4" /> },
         { tab: 'addresses', label: 'Addresses', icon: <MapPin className="w-4 h-4" /> },
         { tab: 'cards', label: 'Cards', icon: <CreditCard className="w-4 h-4" /> },
@@ -251,7 +307,96 @@ export default function App() {
             {/* Console-mode content */}
             <main className="vw-console-shell flex-1 overflow-y-auto">
                 <div className="p-8">
-                    {tab !== 'generator' && tab !== 'settings' && tab !== 'devices' && (
+                    {/* Identities view */}
+                    {tab === 'identities' && !selectedIdentity && (
+                        <>
+                            <div className="flex items-center justify-between mb-6">
+                                <div>
+                                    <h1 className="text-2xl font-bold text-white">Identities</h1>
+                                    <p className="text-sm text-vw-console-text-secondary mt-1">
+                                        {identities.length} {identities.length === 1 ? 'identity' : 'identities'}
+                                    </p>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                    <div className="relative">
+                                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-vw-console-text-secondary" />
+                                        <input
+                                            type="search"
+                                            value={search}
+                                            onChange={(e) => setSearch(e.target.value)}
+                                            placeholder="Search identities…"
+                                            className="pl-9 pr-4 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold w-64"
+                                        />
+                                    </div>
+                                    <button
+                                        onClick={handleGenerateIdentity}
+                                        disabled={generatingIdentity}
+                                        className="flex items-center gap-2 px-4 py-2 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431] disabled:opacity-50"
+                                    >
+                                        {generatingIdentity ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                                        Generate Identity
+                                    </button>
+                                </div>
+                            </div>
+
+                            {identities.length === 0 && !generatingIdentity ? (
+                                <div className="text-center py-20">
+                                    <Users className="w-12 h-12 text-vw-console-text-secondary/30 mx-auto mb-3" />
+                                    <p className="text-vw-console-text-secondary mb-4">No identities yet. Generate your first fictional persona.</p>
+                                    <button
+                                        onClick={handleGenerateIdentity}
+                                        className="inline-flex items-center gap-2 px-4 py-2 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431]"
+                                    >
+                                        <Sparkles className="w-4 h-4" /> Generate Identity
+                                    </button>
+                                </div>
+                            ) : (
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {identities
+                                        .filter(id => !search || id.fullName.toLowerCase().includes(search.toLowerCase()) || id.nationality.toLowerCase().includes(search.toLowerCase()) || id.email.toLowerCase().includes(search.toLowerCase()))
+                                        .sort((a, b) => {
+                                            if (a.metadata.favorite !== b.metadata.favorite) return b.metadata.favorite ? 1 : -1;
+                                            return 0;
+                                        })
+                                        .map((identity) => (
+                                            <IdentityCard
+                                                key={identity.id}
+                                                identity={identity}
+                                                itemCount={items.filter(i => i.identityId === identity.id).length}
+                                                onClick={() => setSelectedIdentity(identity)}
+                                            />
+                                        ))
+                                    }
+                                </div>
+                            )}
+
+                            {identityEditor && (
+                                <IdentityEditorModal
+                                    data={identityEditor}
+                                    onSave={handleSaveIdentity}
+                                    onCancel={() => setIdentityEditor(null)}
+                                />
+                            )}
+                        </>
+                    )}
+
+                    {/* Identity detail view */}
+                    {tab === 'identities' && selectedIdentity && (
+                        <IdentityDetailView
+                            identity={selectedIdentity}
+                            items={items.filter(i => i.identityId === selectedIdentity.id)}
+                            allItems={items}
+                            onBack={() => setSelectedIdentity(null)}
+                            onDelete={() => handleDeleteIdentity(selectedIdentity.id)}
+                            onEditItem={(item) => setEditingItem(item)}
+                            onAssignItem={(itemId) => handleAssignItem(itemId, selectedIdentity.id)}
+                            onUnassignItem={handleUnassignItem}
+                            onCreateItem={() => setShowTypeSelector(true)}
+                        />
+                    )}
+
+                    {/* Existing item views (not identities, generator, settings, devices) */}
+                    {tab !== 'identities' && tab !== 'generator' && tab !== 'settings' && tab !== 'devices' && (
                         <>
                             <div className="flex items-center justify-between mb-6">
                                 <div>
@@ -274,7 +419,7 @@ export default function App() {
                                         />
                                     </div>
                                     <button
-                                        onClick={() => setCreatingType('login')}
+                                        onClick={() => setShowTypeSelector(true)}
                                         className="flex items-center gap-2 px-4 py-2 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431]"
                                     >
                                         <Plus className="w-4 h-4" />
@@ -296,11 +441,16 @@ export default function App() {
                                 </div>
                             )}
 
+                            {showTypeSelector && (
+                                <ItemTypeSelector onSelect={(type) => { setCreatingType(type); setShowTypeSelector(false); }} onCancel={() => setShowTypeSelector(false)} />
+                            )}
+
                             {creatingType && (
                                 <ItemEditor
                                     itemType={creatingType}
+                                    prefillUrl={prefillUrl}
                                     onSave={(data, metadata) => handleSaveItem(creatingType, data, metadata)}
-                                    onCancel={() => setCreatingType(null)}
+                                    onCancel={() => { setCreatingType(null); setPrefillUrl(''); }}
                                 />
                             )}
 
@@ -398,18 +548,19 @@ function ItemCard({ item, onClick }: { item: VaultItem; onClick: () => void }) {
     );
 }
 
-function ItemEditor({ item, itemType, onSave, onCancel, onDelete }: {
+function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: {
     item?: VaultItem;
     itemType: ItemType;
     onSave: (data: any, metadata: any) => void;
     onCancel: () => void;
     onDelete?: () => void;
+    prefillUrl?: string;
 }) {
-    const [label, setLabel] = useState(item?.metadata.label ?? '');
+    const [label, setLabel] = useState(item?.metadata.label ?? (prefillUrl ? normalizeDomain(prefillUrl) : ''));
     const [favorite, setFavorite] = useState(item?.metadata.favorite ?? false);
     const [showPassword, setShowPassword] = useState(false);
 
-    const [loginData, setLoginData] = useState<LoginItem>(item?.itemType === 'login' ? item.data as LoginItem : { url: '', username: '', password: '', notes: '', totpSecret: '' });
+    const [loginData, setLoginData] = useState<LoginItem>(item?.itemType === 'login' ? item.data as LoginItem : { url: prefillUrl || '', username: '', password: '', notes: '', totpSecret: '' });
     const [addressData, setAddressData] = useState<AddressItem>(item?.itemType === 'address' ? item.data as AddressItem : { fullName: '', street: '', city: '', state: '', zipCode: '', country: '', phone: '' });
     const [cardData, setCardData] = useState<CardItem>(item?.itemType === 'card' ? item.data as CardItem : { holderName: '', cardNumber: '', expiryMonth: '', expiryYear: '', cvv: '', notes: '' });
     const [totpData, setTotpData] = useState<TotpItem>(item?.itemType === 'totp' ? item.data as TotpItem : { label: '', secret: '', issuer: '', digits: 6, period: 30, algorithm: 'SHA1' });
@@ -575,15 +726,26 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete }: {
 
 function PasswordGeneratorPanel({ settings }: { settings: VaultSettings | null }) {
     const [password, setPassword] = useState('');
-    const [length, setLength] = useState(settings?.defaultPasswordLength ?? 20);
-    const [uppercase, setUppercase] = useState(true);
-    const [lowercase, setLowercase] = useState(true);
-    const [numbers, setNumbers] = useState(true);
-    const [symbols, setSymbols] = useState(true);
+    const [activePresetId, setActivePresetId] = useState<string>(settings?.defaultGeneratorPreset ?? 'classic');
     const [copied, setCopied] = useState(false);
 
-    const generate = () => {
-        setPassword(generatePassword({ length, uppercase, lowercase, numbers, symbols }));
+    const [pwOpts, setPwOpts] = useState<PasswordOptions>(PRESETS[0].passwordOpts ?? {
+        length: 20, uppercase: true, lowercase: true, numbers: true, symbols: true, standardSymbolsOnly: true,
+    });
+    const [ppOpts, setPpOpts] = useState<PassphraseOptions>(PRESETS[1].passphraseOpts ?? {
+        wordCount: 4, delimiter: '-', capitalize: true, suffixType: 'numeric', suffixLength: 3,
+    });
+
+    const activePreset = PRESETS.find(p => p.id === activePresetId) ?? PRESETS[0];
+
+    const generate = async () => {
+        if (activePreset.type === 'password') {
+            setPassword(generatePassword(pwOpts));
+        } else if (activePreset.type === 'passphrase') {
+            setPassword(generatePassphrase(ppOpts));
+        } else {
+            setPassword(await generateToken());
+        }
     };
 
     useEffect(() => { generate(); }, []);
@@ -591,18 +753,46 @@ function PasswordGeneratorPanel({ settings }: { settings: VaultSettings | null }
     const score = measurePasswordStrength(password);
     const copy = () => { navigator.clipboard.writeText(password); setCopied(true); setTimeout(() => setCopied(false), 1500); };
 
+    const inputClass = "w-full px-3 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold";
+
     return (
         <div className="max-w-xl">
             <h1 className="text-2xl font-bold text-white mb-2">Password Generator</h1>
             <p className="text-sm text-vw-console-text-secondary mb-6">Generate cryptographically secure passwords</p>
 
             <div className="vw-card p-6 space-y-5">
+                {/* Preset selector */}
+                <div>
+                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-2">Preset</label>
+                    <div className="flex gap-2">
+                        {PRESETS.map(preset => (
+                            <button
+                                key={preset.id}
+                                onClick={() => {
+                                    setActivePresetId(preset.id);
+                                    if (preset.passwordOpts) setPwOpts(preset.passwordOpts);
+                                    if (preset.passphraseOpts) setPpOpts(preset.passphraseOpts);
+                                }}
+                                className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                                    activePresetId === preset.id
+                                        ? 'bg-vw-gold text-vw-console-bg font-medium'
+                                        : 'bg-vw-console-surface text-vw-console-text-secondary border border-vw-console-border hover:text-white'
+                                }`}
+                            >
+                                {preset.label}
+                            </button>
+                        ))}
+                    </div>
+                    <p className="text-xs text-vw-console-text-secondary mt-1.5">{activePreset.description}</p>
+                </div>
+
+                {/* Generated output */}
                 <div className="flex items-center gap-3">
                     <input
                         type="text"
                         readOnly
                         value={password}
-                        className="flex-1 px-4 py-3 bg-vw-console-surface border border-vw-console-border rounded-lg text-white font-mono text-sm"
+                        className="flex-1 px-4 py-3 bg-vw-console-surface border border-vw-console-border rounded-lg text-white font-mono text-sm break-all"
                     />
                     <button onClick={copy} className="px-3 py-3 bg-vw-console-surface border border-vw-console-border rounded-lg text-vw-console-text-secondary hover:text-white">
                         {copied ? <Check className="w-4 h-4 text-vw-signal-online" /> : <Copy className="w-4 h-4" />}
@@ -619,26 +809,75 @@ function PasswordGeneratorPanel({ settings }: { settings: VaultSettings | null }
                     <p className="text-xs text-right text-vw-console-text-secondary">{strengthLabel(score)}</p>
                 </div>
 
-                <div>
-                    <div className="flex items-center justify-between mb-2">
-                        <label className="text-sm text-vw-console-text-secondary">Length: {length}</label>
-                    </div>
-                    <input type="range" min="8" max="64" value={length} onChange={(e) => setLength(parseInt(e.target.value))} className="w-full accent-vw-gold" />
-                </div>
+                {/* Password-type options */}
+                {activePreset.type === 'password' && (
+                    <>
+                        <div>
+                            <div className="flex items-center justify-between mb-2">
+                                <label className="text-sm text-vw-console-text-secondary">Length: {pwOpts.length}</label>
+                            </div>
+                            <input type="range" min="8" max="64" value={pwOpts.length} onChange={(e) => setPwOpts({ ...pwOpts, length: parseInt(e.target.value) })} className="w-full accent-vw-gold" />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            {[
+                                { label: 'Uppercase (A-Z)', key: 'uppercase' as const },
+                                { label: 'Lowercase (a-z)', key: 'lowercase' as const },
+                                { label: 'Numbers (0-9)', key: 'numbers' as const },
+                                { label: 'Symbols (!@#)', key: 'symbols' as const },
+                            ].map(({ label, key }) => (
+                                <label key={label} className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
+                                    <input type="checkbox" checked={pwOpts[key]} onChange={(e) => setPwOpts({ ...pwOpts, [key]: e.target.checked })} className="accent-vw-gold" />
+                                    {label}
+                                </label>
+                            ))}
+                        </div>
+                        {pwOpts.symbols && (
+                            <label className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
+                                <input type="checkbox" checked={pwOpts.standardSymbolsOnly} onChange={(e) => setPwOpts({ ...pwOpts, standardSymbolsOnly: e.target.checked })} className="accent-vw-gold" />
+                                Standard symbols only (!@#$%^&*()-_=+)
+                            </label>
+                        )}
+                    </>
+                )}
 
-                <div className="grid grid-cols-2 gap-3">
-                    {[
-                        { label: 'Uppercase (A-Z)', val: uppercase, set: setUppercase },
-                        { label: 'Lowercase (a-z)', val: lowercase, set: setLowercase },
-                        { label: 'Numbers (0-9)', val: numbers, set: setNumbers },
-                        { label: 'Symbols (!@#)', val: symbols, set: setSymbols },
-                    ].map(({ label, val, set: setVal }) => (
-                        <label key={label} className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
-                            <input type="checkbox" checked={val} onChange={(e) => setVal(e.target.checked)} className="accent-vw-gold" />
-                            {label}
+                {/* Passphrase-type options */}
+                {activePreset.type === 'passphrase' && (
+                    <>
+                        <div>
+                            <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Word count: {ppOpts.wordCount}</label>
+                            <input type="range" min="2" max="8" value={ppOpts.wordCount} onChange={(e) => setPpOpts({ ...ppOpts, wordCount: parseInt(e.target.value) })} className="w-full accent-vw-gold" />
+                        </div>
+                        <div>
+                            <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Delimiter</label>
+                            <input className={inputClass} value={ppOpts.delimiter} onChange={(e) => setPpOpts({ ...ppOpts, delimiter: e.target.value })} maxLength={3} />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Suffix type</label>
+                                <select className={inputClass} value={ppOpts.suffixType} onChange={(e) => setPpOpts({ ...ppOpts, suffixType: e.target.value as any })}>
+                                    <option value="none">None</option>
+                                    <option value="numeric">Numeric</option>
+                                    <option value="alphanumeric">Alphanumeric</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Suffix length: {ppOpts.suffixLength}</label>
+                                <input type="range" min="0" max="8" value={ppOpts.suffixLength} onChange={(e) => setPpOpts({ ...ppOpts, suffixLength: parseInt(e.target.value) })} className="w-full accent-vw-gold" />
+                            </div>
+                        </div>
+                        <label className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
+                            <input type="checkbox" checked={ppOpts.capitalize} onChange={(e) => setPpOpts({ ...ppOpts, capitalize: e.target.checked })} className="accent-vw-gold" />
+                            Capitalize first letter of each word
                         </label>
-                    ))}
-                </div>
+                    </>
+                )}
+
+                {/* Token type info */}
+                {activePreset.type === 'token' && (
+                    <p className="text-xs text-vw-console-text-secondary">
+                        Generates a JWT-like token with three base64url segments separated by dots. No configuration needed.
+                    </p>
+                )}
 
                 <button onClick={generate} className="w-full py-2.5 bg-vw-gold text-vw-console-bg rounded-lg font-medium hover:bg-[#C69431] flex items-center justify-center gap-2">
                     <RefreshCw className="w-4 h-4" /> Generate
@@ -648,8 +887,50 @@ function PasswordGeneratorPanel({ settings }: { settings: VaultSettings | null }
     );
 }
 
+function ItemTypeSelector({ onSelect, onCancel }: {
+    onSelect: (type: ItemType) => void;
+    onCancel: () => void;
+}) {
+    const types: { type: ItemType; label: string; icon: React.ReactNode; desc: string }[] = [
+        { type: 'login', label: 'Login', icon: <Key className="w-6 h-6" />, desc: 'Username, password, URL' },
+        { type: 'address', label: 'Address', icon: <MapPin className="w-6 h-6" />, desc: 'Full postal address' },
+        { type: 'card', label: 'Card', icon: <CreditCard className="w-6 h-6" />, desc: 'Credit/debit card details' },
+        { type: 'totp', label: 'TOTP', icon: <Clock className="w-6 h-6" />, desc: 'Authenticator secret' },
+        { type: 'passkey', label: 'Passkey', icon: <Fingerprint className="w-6 h-6" />, desc: 'WebAuthn credential' },
+    ];
+
+    return (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onCancel}>
+            <div className="vw-card p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-lg font-semibold text-white">New Item Type</h2>
+                    <button onClick={onCancel} className="text-vw-console-text-secondary hover:text-white"><X className="w-5 h-5" /></button>
+                </div>
+                <div className="space-y-2">
+                    {types.map(({ type, label, icon, desc }) => (
+                        <button
+                            key={type}
+                            onClick={() => onSelect(type)}
+                            className="w-full flex items-center gap-4 p-4 bg-vw-console-surface border border-vw-console-border rounded-lg hover:border-vw-gold/30 transition-colors text-left"
+                        >
+                            <div className="w-12 h-12 rounded-lg bg-vw-console-elevated flex items-center justify-center text-vw-gold flex-shrink-0">
+                                {icon}
+                            </div>
+                            <div>
+                                <div className="text-sm font-medium text-white">{label}</div>
+                                <div className="text-xs text-vw-console-text-secondary">{desc}</div>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-vw-console-text-secondary ml-auto" />
+                        </button>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+}
+
 function SettingsPanel({ settings, onSave }: { settings: VaultSettings | null; onSave: (s: VaultSettings) => Promise<void> }) {
-    const [local, setLocal] = useState<VaultSettings>(settings ?? { autoLockMinutes: 5, autoFillEnabled: true, autoDetectEnabled: true, defaultPasswordLength: 20, defaultPasswordComplexity: 'maximum' });
+    const [local, setLocal] = useState<VaultSettings>(settings ?? DEFAULT_SETTINGS);
     const [saved, setSaved] = useState(false);
 
     const handleSave = async () => {
@@ -678,6 +959,12 @@ function SettingsPanel({ settings, onSave }: { settings: VaultSettings | null; o
                         <option value="medium">Medium</option>
                         <option value="high">High</option>
                         <option value="maximum">Maximum</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Default generator preset</label>
+                    <select className={inputClass} value={local.defaultGeneratorPreset} onChange={(e) => setLocal({ ...local, defaultGeneratorPreset: e.target.value })}>
+                        {PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                     </select>
                 </div>
                 <label className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
@@ -733,6 +1020,235 @@ function DevicesPanel() {
                                     <span className="px-2 py-0.5 text-xs bg-vw-gold/20 text-vw-gold rounded-full font-medium">Master</span>
                                 )}
                                 <span className={`w-2 h-2 rounded-full vw-led ${dev.approvalState === 'approved' ? 'bg-vw-signal-online' : dev.approvalState === 'pending' ? 'bg-vw-signal-warning' : 'bg-vw-signal-alert'}`} />
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function IdentityCard({ identity, itemCount, onClick }: { identity: Identity; itemCount: number; onClick: () => void }) {
+    return (
+        <div onClick={onClick} className="vw-card p-5 cursor-pointer hover:border-vw-gold/30 transition-colors group">
+            <div className="flex items-start gap-4">
+                <div className="w-14 h-14 rounded-xl bg-vw-console-surface flex items-center justify-center flex-shrink-0 overflow-hidden">
+                    {identity.facePhoto ? (
+                        <img src={identity.facePhoto} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                        <User className="w-6 h-6 text-vw-gold" />
+                    )}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-semibold text-white truncate">{identity.fullName}</h3>
+                        {identity.metadata.favorite && <Star className="w-3 h-3 text-vw-gold fill-vw-gold flex-shrink-0" />}
+                    </div>
+                    <p className="text-xs text-vw-console-text-secondary truncate">{identity.nationality} · {identity.email}</p>
+                    <p className="text-[10px] text-vw-console-text-secondary/60 mt-1 line-clamp-2">{identity.bio}</p>
+                    <div className="flex items-center gap-2 mt-2">
+                        <span className="text-[10px] px-2 py-0.5 bg-vw-console-surface rounded-full text-vw-console-text-secondary">
+                            {itemCount} {itemCount === 1 ? 'item' : 'items'}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function IdentityEditorModal({ data, onSave, onCancel }: { data: GeneratedIdentityData; onSave: (data: GeneratedIdentityData) => void; onCancel: () => void }) {
+    const [local, setLocal] = useState<GeneratedIdentityData>(data);
+
+    const inputClass = "w-full px-3 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold";
+    const labelClass = "block text-xs font-medium text-vw-console-text-secondary mb-1.5";
+
+    return (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onCancel}>
+            <div className="vw-card p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-2">
+                        <Sparkles className="w-5 h-5 text-vw-gold" />
+                        <h2 className="text-lg font-semibold text-white">Review Generated Identity</h2>
+                    </div>
+                    <button onClick={onCancel} className="text-vw-console-text-secondary hover:text-white"><X className="w-5 h-5" /></button>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className={labelClass}>Full Name</label>
+                            <input className={inputClass} value={local.fullName} onChange={(e) => setLocal({ ...local, fullName: e.target.value })} />
+                        </div>
+                        <div>
+                            <label className={labelClass}>Gender</label>
+                            <select className={inputClass} value={local.gender} onChange={(e) => setLocal({ ...local, gender: e.target.value as any })}>
+                                <option value="male">Male</option>
+                                <option value="female">Female</option>
+                                <option value="non-binary">Non-binary</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className={labelClass}>Birth Date</label>
+                            <input className={inputClass} value={local.birthDate} onChange={(e) => setLocal({ ...local, birthDate: e.target.value })} />
+                        </div>
+                        <div>
+                            <label className={labelClass}>Nationality</label>
+                            <input className={inputClass} value={local.nationality} onChange={(e) => setLocal({ ...local, nationality: e.target.value })} />
+                        </div>
+                    </div>
+                    <div>
+                        <label className={labelClass}>Bio</label>
+                        <textarea className={inputClass} rows={2} value={local.bio} onChange={(e) => setLocal({ ...local, bio: e.target.value })} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className={labelClass}>Email</label>
+                            <input className={inputClass} value={local.email} onChange={(e) => setLocal({ ...local, email: e.target.value })} />
+                        </div>
+                        <div>
+                            <label className={labelClass}>Phone</label>
+                            <input className={inputClass} value={local.phone} onChange={(e) => setLocal({ ...local, phone: e.target.value })} />
+                        </div>
+                    </div>
+                    <div className="border-t border-vw-console-border pt-4">
+                        <p className="text-xs font-medium text-vw-console-text-secondary mb-3">Address</p>
+                        <div className="space-y-3">
+                            <input className={inputClass} placeholder="Street" value={local.address.street} onChange={(e) => setLocal({ ...local, address: { ...local.address, street: e.target.value } })} />
+                            <div className="grid grid-cols-2 gap-3">
+                                <input className={inputClass} placeholder="City" value={local.address.city} onChange={(e) => setLocal({ ...local, address: { ...local.address, city: e.target.value } })} />
+                                <input className={inputClass} placeholder="State" value={local.address.state} onChange={(e) => setLocal({ ...local, address: { ...local.address, state: e.target.value } })} />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <input className={inputClass} placeholder="ZIP" value={local.address.zipCode} onChange={(e) => setLocal({ ...local, address: { ...local.address, zipCode: e.target.value } })} />
+                                <input className={inputClass} placeholder="Country" value={local.address.country} onChange={(e) => setLocal({ ...local, address: { ...local.address, country: e.target.value } })} />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 mt-6">
+                    <button onClick={onCancel} className="px-4 py-2 text-sm text-vw-console-text-secondary hover:text-white">Discard</button>
+                    <button onClick={() => onSave(local)} className="px-4 py-2 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431]">
+                        Save Identity
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function IdentityDetailView({ identity, items, allItems, onBack, onDelete, onEditItem, onAssignItem, onUnassignItem, onCreateItem }: {
+    identity: Identity;
+    items: VaultItem[];
+    allItems: VaultItem[];
+    onBack: () => void;
+    onDelete: () => void;
+    onEditItem: (item: VaultItem) => void;
+    onAssignItem: (itemId: string) => void;
+    onUnassignItem: (itemId: string) => void;
+    onCreateItem: () => void;
+}) {
+    const [showAssignList, setShowAssignList] = useState(false);
+    const unassignedItems = allItems.filter(i => !i.identityId && !i.deletedAt);
+
+    return (
+        <div>
+            <div className="flex items-center gap-3 mb-6">
+                <button onClick={onBack} className="text-vw-console-text-secondary hover:text-white flex items-center gap-1 text-sm">
+                    <ChevronRight className="w-4 h-4 rotate-180" /> Back
+                </button>
+            </div>
+
+            <div className="flex items-start gap-6 mb-8">
+                <div className="w-20 h-20 rounded-2xl bg-vw-console-surface flex items-center justify-center flex-shrink-0 overflow-hidden">
+                    {identity.facePhoto ? (
+                        <img src={identity.facePhoto} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                        <User className="w-8 h-8 text-vw-gold" />
+                    )}
+                </div>
+                <div className="flex-1">
+                    <h1 className="text-2xl font-bold text-white">{identity.fullName}</h1>
+                    <p className="text-sm text-vw-console-text-secondary mt-1">{identity.gender} · {identity.birthDate} · {identity.nationality}</p>
+                    <p className="text-sm text-vw-console-text-secondary/80 mt-2">{identity.bio}</p>
+                </div>
+                <button onClick={onDelete} className="text-vw-signal-alert/60 hover:text-vw-signal-alert text-sm flex items-center gap-1">
+                    <Trash2 className="w-4 h-4" /> Delete
+                </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                <div className="vw-card p-4">
+                    <p className="text-xs font-medium text-vw-console-text-secondary uppercase tracking-wider mb-2">Contact</p>
+                    <div className="space-y-1.5">
+                        <div className="flex items-center gap-2 text-sm text-white">
+                            <span className="text-vw-console-text-secondary text-xs w-16">Email</span> {identity.email}
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-white">
+                            <span className="text-vw-console-text-secondary text-xs w-16">Phone</span> {identity.phone}
+                        </div>
+                    </div>
+                </div>
+                <div className="vw-card p-4">
+                    <p className="text-xs font-medium text-vw-console-text-secondary uppercase tracking-wider mb-2">Address</p>
+                    <div className="text-sm text-white space-y-0.5">
+                        <p>{identity.address.street}</p>
+                        <p>{identity.address.city}, {identity.address.state} {identity.address.zipCode}</p>
+                        <p>{identity.address.country}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-white">Linked Items ({items.length})</h2>
+                <div className="flex items-center gap-2">
+                    <button onClick={() => setShowAssignList(!showAssignList)} className="text-xs text-vw-gold hover:underline">
+                        {showAssignList ? 'Cancel' : 'Assign existing item'}
+                    </button>
+                    <button onClick={onCreateItem} className="flex items-center gap-1 text-xs text-vw-gold hover:underline">
+                        <Plus className="w-3 h-3" /> New item
+                    </button>
+                </div>
+            </div>
+
+            {showAssignList && unassignedItems.length > 0 && (
+                <div className="vw-card p-3 mb-4 space-y-1">
+                    {unassignedItems.map((item) => (
+                        <div key={item.id} className="flex items-center justify-between p-2 hover:bg-vw-console-surface rounded-lg cursor-pointer" onClick={() => { onAssignItem(item.id); setShowAssignList(false); }}>
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs text-vw-console-text-secondary uppercase">{item.itemType}</span>
+                                <span className="text-sm text-white">{item.metadata.label}</span>
+                            </div>
+                            <Plus className="w-3 h-3 text-vw-gold" />
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {items.length === 0 ? (
+                <p className="text-sm text-vw-console-text-secondary py-8 text-center">No items linked to this identity yet.</p>
+            ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {items.map((item) => (
+                        <div key={item.id} className="vw-card p-4 group">
+                            <div className="flex items-start justify-between">
+                                <div className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer" onClick={() => onEditItem(item)}>
+                                    <div className="w-9 h-9 rounded-lg bg-vw-console-surface flex items-center justify-center flex-shrink-0">
+                                        {ITEM_TYPE_CONFIG[item.itemType]?.icon}
+                                    </div>
+                                    <div className="min-w-0">
+                                        <div className="text-sm font-medium text-white truncate">{item.metadata.label}</div>
+                                        <div className="text-xs text-vw-console-text-secondary capitalize">{item.itemType}</div>
+                                    </div>
+                                </div>
+                                <button onClick={() => onUnassignItem(item.id)} className="text-vw-console-text-secondary hover:text-vw-signal-alert opacity-0 group-hover:opacity-100 transition-opacity text-xs" title="Unassign">
+                                    <X className="w-3.5 h-3.5" />
+                                </button>
                             </div>
                         </div>
                     ))}

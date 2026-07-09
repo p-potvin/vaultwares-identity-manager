@@ -30,11 +30,12 @@ export function createEnvelope(
         ciphertext: toBase64(ciphertext),
         nonce: toBase64(nonce),
         encapsulatedKey: toBase64(encapsulatedKey),
-        metadata: item.metadata,
+        metadata: { ...item.metadata, identityId: item.identityId },
         signature: '',
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
         authorDeviceId: deviceId,
+        lastUsedAt: item.lastUsedAt,
     };
 
     const signPayload = new TextEncoder().encode(
@@ -74,10 +75,12 @@ export function openEnvelope(
         itemType: envelope.itemType as ItemType,
         data,
         metadata: envelope.metadata as VaultItemMetadata,
+        identityId: envelope.metadata.identityId ?? null,
         createdAt: envelope.createdAt,
         updatedAt: envelope.updatedAt,
         authorDeviceId: envelope.authorDeviceId,
         deletedAt: encryptedItem.deletedAt,
+        lastUsedAt: envelope.lastUsedAt ?? null,
     };
 }
 
@@ -93,10 +96,12 @@ export function createVaultItem(
         itemType,
         data,
         metadata,
+        identityId: null,
         createdAt: now,
         updatedAt: now,
         authorDeviceId: deviceId,
         deletedAt: null,
+        lastUsedAt: null,
     };
 }
 

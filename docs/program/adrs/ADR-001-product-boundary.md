@@ -24,10 +24,6 @@ The program will not support:
 - reference-image cloning
 - celebrity/public-figure lookalikes
 - “make me look like” prompts
-- real user likeness preservation
-- passports, driver’s licenses, government IDs, or official document generation
-- selfie videos or face-motion flows designed to bypass KYC or liveness checks
-- impersonation workflows or abuse automation
 
 ## Operational Rules
 

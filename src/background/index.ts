@@ -3,10 +3,13 @@ import { createEnvelope, openEnvelope, createVaultItem, updateVaultItemTimestamp
 import { generateRecoveryKit, downloadRecoveryKit } from '../crypto/recovery';
 import { generateKemKeyPair, generateSigKeyPair, kemKeyPairToBase64, sigKeyPairToBase64, toBase64, sign } from '../crypto/pqc';
 import { getEncryptedItems, saveEncryptedItem, deleteEncryptedItem, replaceAllEncryptedItems, getSettings, saveSettings, getSyncCursor, setSyncCursor } from '../utils/storage';
+import { getEncryptedIdentities, saveEncryptedIdentity, deleteEncryptedIdentity, encryptIdentity, decryptIdentity } from '../utils/identity-storage';
 import { register as apiRegister } from '../api/auth';
 import { createVaultItem as apiCreateItem, updateVaultItem as apiUpdateItem, deleteVaultItem as apiDeleteItem } from '../api/vault';
 import { pushChanges, pullChanges } from '../api/sync';
-import type { VaultItem, EncryptedVaultItem, ItemType, VaultItemData, VaultItemMetadata, VaultSettings, RecoveryKit } from '../types';
+import { enqueueCreate, enqueueUpdate, enqueueDelete, processQueue, fullSync, startAutoSync } from '../api/sync-queue';
+import { generateIdentity as generateIdentityApi } from '../api/generation';
+import type { VaultItem, EncryptedVaultItem, ItemType, VaultItemData, VaultItemMetadata, VaultSettings, RecoveryKit, Identity, GeneratedIdentityData } from '../types';
 
 export type MessageType =
     | 'INIT_CHECK'
@@ -23,7 +26,16 @@ export type MessageType =
     | 'GENERATE_RECOVERY_KIT'
     | 'DOWNLOAD_RECOVERY_KIT'
     | 'SYNC'
-    | 'GET_PAGE_MATCHES';
+    | 'GET_PAGE_MATCHES'
+    | 'OPEN_POPUP_CREATE'
+    | 'GET_IDENTITIES'
+    | 'CREATE_IDENTITY'
+    | 'UPDATE_IDENTITY'
+    | 'DELETE_IDENTITY'
+    | 'GENERATE_IDENTITY'
+    | 'ASSIGN_ITEM_TO_IDENTITY'
+    | 'UNASSIGN_ITEM_FROM_IDENTITY'
+    | 'UPDATE_ITEM_LAST_USED';
 
 export interface Message {
     type: MessageType;
@@ -69,7 +81,7 @@ async function handleSetupAccount(payload: { email: string; pin: string }): Prom
         });
 
         await setDeviceId(resp.deviceId);
-        setCachedMasterKey(masterKey);
+        await setCachedMasterKey(masterKey);
         resetLockTimer();
 
         return { success: true, data: { deviceId: resp.deviceId, deviceRole: resp.deviceRole } };
@@ -84,7 +96,7 @@ async function handleUnlock(payload: { pin: string }): Promise<MessageResponse> 
         if (!masterKey) {
             return { success: false, error: 'Invalid PIN' };
         }
-        setCachedMasterKey(masterKey);
+        await setCachedMasterKey(masterKey);
         resetLockTimer();
         return { success: true };
     } catch (e) {
@@ -92,14 +104,15 @@ async function handleUnlock(payload: { pin: string }): Promise<MessageResponse> 
     }
 }
 
-function handleLock(): MessageResponse {
-    setCachedMasterKey(null);
+async function handleLock(): Promise<MessageResponse> {
+    await setCachedMasterKey(null);
     if (lockTimer) clearTimeout(lockTimer);
     return { success: true };
 }
 
 async function handleGetUnlocked(): Promise<MessageResponse> {
-    return { success: true, data: { unlocked: getCachedMasterKey() !== null } };
+    const key = await getCachedMasterKey();
+    return { success: true, data: { unlocked: key !== null } };
 }
 
 async function handleGetItems(): Promise<MessageResponse> {
@@ -112,7 +125,7 @@ async function handleGetItems(): Promise<MessageResponse> {
             return { success: false, error: 'Keychain not initialized' };
         }
 
-        const masterKey = getCachedMasterKey();
+        const masterKey = await getCachedMasterKey();
         if (!masterKey) {
             return { success: false, error: 'Vault is locked' };
         }
@@ -147,12 +160,7 @@ async function handleCreateItem(payload: { itemType: ItemType; data: VaultItemDa
         const encrypted = createEnvelope(item, kemPubKey, sigKp.secretKey, keychain.deviceId);
 
         await saveEncryptedItem(encrypted);
-
-        try {
-            await apiCreateItem(encrypted.envelope);
-        } catch (e) {
-            console.warn('API sync failed, item saved locally:', e);
-        }
+        await enqueueCreate(encrypted);
 
         return { success: true, data: item };
     } catch (e) {
@@ -186,12 +194,7 @@ async function handleUpdateItem(payload: { id: string; data: VaultItemData; meta
 
         const encrypted = createEnvelope(updated, kemPubKey, sigKp.secretKey, keychain.deviceId);
         await saveEncryptedItem(encrypted);
-
-        try {
-            await apiUpdateItem(updated.id, encrypted.envelope);
-        } catch (e) {
-            console.warn('API sync failed, item updated locally:', e);
-        }
+        await enqueueUpdate(encrypted);
 
         return { success: true, data: updated };
     } catch (e) {
@@ -202,12 +205,7 @@ async function handleUpdateItem(payload: { id: string; data: VaultItemData; meta
 async function handleDeleteItem(payload: { id: string }): Promise<MessageResponse> {
     try {
         await deleteEncryptedItem(payload.id);
-
-        try {
-            await apiDeleteItem(payload.id);
-        } catch (e) {
-            console.warn('API sync failed, item deleted locally:', e);
-        }
+        await enqueueDelete(payload.id);
 
         return { success: true };
     } catch (e) {
@@ -227,7 +225,7 @@ async function handleSaveSettings(payload: VaultSettings): Promise<MessageRespon
 
 async function handleGenerateRecoveryKit(payload: { pin: string }): Promise<MessageResponse> {
     try {
-        const masterKey = getCachedMasterKey();
+        const masterKey = await getCachedMasterKey();
         if (!masterKey) return { success: false, error: 'Vault is locked' };
 
         const kit = generateRecoveryKit(masterKey, payload.pin);
@@ -248,32 +246,9 @@ async function handleDownloadRecoveryKit(payload: { kit: RecoveryKit }): Promise
 
 async function handleSync(): Promise<MessageResponse> {
     try {
-        const localItems = await getEncryptedItems();
-        const cursor = await getSyncCursor();
-
-        const pushResp = await pushChanges(localItems, cursor);
-        await setSyncCursor(pushResp.cursor);
-
-        const pullResp = await pullChanges(pushResp.cursor);
-        await setSyncCursor(pullResp.cursor);
-
-        const merged = [...localItems];
-        for (const remoteItem of pullResp.items) {
-            const idx = merged.findIndex(i => i.id === remoteItem.id);
-            if (idx >= 0) {
-                const local = merged[idx];
-                const remoteUpdated = new Date(remoteItem.envelope.updatedAt).getTime();
-                const localUpdated = new Date(local.envelope.updatedAt).getTime();
-                if (remoteUpdated > localUpdated) {
-                    merged[idx] = remoteItem;
-                }
-            } else {
-                merged.push(remoteItem);
-            }
-        }
-
-        await replaceAllEncryptedItems(merged);
-        return { success: true, data: { synced: pullResp.items.length } };
+        const queueResult = await processQueue();
+        const syncResult = await fullSync();
+        return { success: true, data: { ...syncResult, ...queueResult } };
     } catch (e) {
         return { success: false, error: (e as Error).message };
     }
@@ -287,26 +262,232 @@ async function handleGetPageMatches(payload: { url: string }): Promise<MessageRe
 
         if (!kemSecretKey || !sigKp) return { success: true, data: [] };
 
-        const masterKey = getCachedMasterKey();
+        const masterKey = await getCachedMasterKey();
         if (!masterKey) return { success: true, data: [] };
 
-        const { normalizeDomain } = await import('../utils/domain');
-        const normalizedDomain = normalizeDomain(payload.url);
+        const { normalizeDomain, domainMatches, urlMatches } = await import('../utils/domain');
+        const pageDomain = normalizeDomain(payload.url);
 
-        const matches: VaultItem[] = [];
+        const exactMatches: VaultItem[] = [];
+        const fuzzyMatches: VaultItem[] = [];
+
         for (const enc of items) {
             if (enc.deletedAt) continue;
-            if (enc.envelope.metadata.domain === normalizedDomain) {
+            const itemDomain = enc.envelope.metadata.domain || '';
+            const isExact = itemDomain === pageDomain;
+            const isFuzzy = !isExact && domainMatches(itemDomain, payload.url);
+
+            if (isExact || isFuzzy) {
                 try {
                     const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
-                    matches.push(item);
+                    if (isExact) exactMatches.push(item);
+                    else fuzzyMatches.push(item);
+                } catch (e) {
+                    console.error('Failed to decrypt item:', enc.id, e);
+                }
+                continue;
+            }
+
+            if (enc.envelope.itemType === 'login') {
+                try {
+                    const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+                    const loginData = item.data as import('../types').LoginItem;
+                    if (loginData.url && urlMatches(loginData.url, payload.url)) {
+                        fuzzyMatches.push(item);
+                    }
                 } catch (e) {
                     console.error('Failed to decrypt item:', enc.id, e);
                 }
             }
         }
 
-        return { success: true, data: matches };
+        const allMatches = [...exactMatches, ...fuzzyMatches];
+        return { success: true, data: allMatches };
+    } catch (e) {
+        return { success: false, error: (e as Error).message };
+    }
+}
+
+function createIdentityObject(data: GeneratedIdentityData, deviceId: string): Identity {
+    const now = new Date().toISOString();
+    return {
+        id: crypto.randomUUID(),
+        fullName: data.fullName,
+        gender: data.gender,
+        birthDate: data.birthDate,
+        nationality: data.nationality,
+        bio: data.bio,
+        email: data.email,
+        phone: data.phone,
+        address: data.address,
+        facePhoto: null,
+        metadata: { tags: [], favorite: false },
+        createdAt: now,
+        updatedAt: now,
+        authorDeviceId: deviceId,
+        deletedAt: null,
+        lastUsedAt: null,
+    };
+}
+
+async function handleGetIdentities(): Promise<MessageResponse> {
+    try {
+        const encIdentities = await getEncryptedIdentities();
+        const kemSecretKey = await getKemSecretKey();
+        const sigKp = await getSigKeyPair();
+        if (!kemSecretKey || !sigKp) return { success: true, data: [] };
+
+        const masterKey = await getCachedMasterKey();
+        if (!masterKey) return { success: true, data: [] };
+
+        const identities: Identity[] = [];
+        for (const enc of encIdentities) {
+            if (enc.deletedAt) continue;
+            try {
+                identities.push(decryptIdentity(enc, kemSecretKey, sigKp.publicKey));
+            } catch (e) {
+                console.error('Failed to decrypt identity:', enc.id, e);
+            }
+        }
+        return { success: true, data: identities };
+    } catch (e) {
+        return { success: false, error: (e as Error).message };
+    }
+}
+
+async function handleCreateIdentity(payload: { data: GeneratedIdentityData }): Promise<MessageResponse> {
+    try {
+        const keychain = await getKeychain();
+        if (!keychain?.deviceId) return { success: false, error: 'No device ID' };
+
+        const kemPubKey = await getKemPublicKey();
+        const sigKp = await getSigKeyPair();
+        if (!kemPubKey || !sigKp) return { success: false, error: 'Keychain not initialized' };
+
+        const identity = createIdentityObject(payload.data, keychain.deviceId);
+        const encrypted = encryptIdentity(identity, kemPubKey, sigKp.secretKey, keychain.deviceId);
+        await saveEncryptedIdentity(encrypted);
+
+        return { success: true, data: identity };
+    } catch (e) {
+        return { success: false, error: (e as Error).message };
+    }
+}
+
+async function handleUpdateIdentity(payload: { identity: Identity }): Promise<MessageResponse> {
+    try {
+        const keychain = await getKeychain();
+        if (!keychain?.deviceId) return { success: false, error: 'No device ID' };
+
+        const kemPubKey = await getKemPublicKey();
+        const sigKp = await getSigKeyPair();
+        if (!kemPubKey || !sigKp) return { success: false, error: 'Keychain not initialized' };
+
+        const updated: Identity = { ...payload.identity, updatedAt: new Date().toISOString() };
+        const encrypted = encryptIdentity(updated, kemPubKey, sigKp.secretKey, keychain.deviceId);
+        await saveEncryptedIdentity(encrypted);
+
+        return { success: true, data: updated };
+    } catch (e) {
+        return { success: false, error: (e as Error).message };
+    }
+}
+
+async function handleDeleteIdentity(payload: { id: string }): Promise<MessageResponse> {
+    try {
+        await deleteEncryptedIdentity(payload.id);
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: (e as Error).message };
+    }
+}
+
+async function handleGenerateIdentity(payload?: { options?: any }): Promise<MessageResponse> {
+    try {
+        const settings = await getSettings();
+        const data = await generateIdentityApi(settings.generationEndpointUrl || undefined, payload?.options);
+        return { success: true, data };
+    } catch (e) {
+        return { success: false, error: (e as Error).message };
+    }
+}
+
+async function handleAssignItemToIdentity(payload: { itemId: string; identityId: string }): Promise<MessageResponse> {
+    try {
+        const keychain = await getKeychain();
+        if (!keychain?.deviceId) return { success: false, error: 'No device ID' };
+
+        const kemPubKey = await getKemPublicKey();
+        const sigKp = await getSigKeyPair();
+        if (!kemPubKey || !sigKp) return { success: false, error: 'Keychain not initialized' };
+
+        const items = await getEncryptedItems();
+        const enc = items.find(i => i.id === payload.itemId);
+        if (!enc) return { success: false, error: 'Item not found' };
+
+        const kemSecretKey = await getKemSecretKey();
+        if (!kemSecretKey) return { success: false, error: 'Keychain not initialized' };
+
+        const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+        const updated: VaultItem = { ...item, identityId: payload.identityId, updatedAt: new Date().toISOString() };
+        const reencrypted = createEnvelope(updated, kemPubKey, sigKp.secretKey, keychain.deviceId);
+        await saveEncryptedItem(reencrypted);
+
+        return { success: true, data: updated };
+    } catch (e) {
+        return { success: false, error: (e as Error).message };
+    }
+}
+
+async function handleUnassignItemFromIdentity(payload: { itemId: string }): Promise<MessageResponse> {
+    try {
+        const keychain = await getKeychain();
+        if (!keychain?.deviceId) return { success: false, error: 'No device ID' };
+
+        const kemPubKey = await getKemPublicKey();
+        const sigKp = await getSigKeyPair();
+        if (!kemPubKey || !sigKp) return { success: false, error: 'Keychain not initialized' };
+
+        const items = await getEncryptedItems();
+        const enc = items.find(i => i.id === payload.itemId);
+        if (!enc) return { success: false, error: 'Item not found' };
+
+        const kemSecretKey = await getKemSecretKey();
+        if (!kemSecretKey) return { success: false, error: 'Keychain not initialized' };
+
+        const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+        const updated: VaultItem = { ...item, identityId: null, updatedAt: new Date().toISOString() };
+        const reencrypted = createEnvelope(updated, kemPubKey, sigKp.secretKey, keychain.deviceId);
+        await saveEncryptedItem(reencrypted);
+
+        return { success: true, data: updated };
+    } catch (e) {
+        return { success: false, error: (e as Error).message };
+    }
+}
+
+async function handleUpdateItemLastUsed(payload: { itemId: string }): Promise<MessageResponse> {
+    try {
+        const keychain = await getKeychain();
+        if (!keychain?.deviceId) return { success: false, error: 'No device ID' };
+
+        const kemPubKey = await getKemPublicKey();
+        const sigKp = await getSigKeyPair();
+        if (!kemPubKey || !sigKp) return { success: false, error: 'Keychain not initialized' };
+
+        const items = await getEncryptedItems();
+        const enc = items.find(i => i.id === payload.itemId);
+        if (!enc) return { success: false, error: 'Item not found' };
+
+        const kemSecretKey = await getKemSecretKey();
+        if (!kemSecretKey) return { success: false, error: 'Keychain not initialized' };
+
+        const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+        const updated: VaultItem = { ...item, lastUsedAt: new Date().toISOString() };
+        const reencrypted = createEnvelope(updated, kemPubKey, sigKp.secretKey, keychain.deviceId);
+        await saveEncryptedItem(reencrypted);
+
+        return { success: true };
     } catch (e) {
         return { success: false, error: (e as Error).message };
     }
@@ -327,7 +508,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
                 response = await handleUnlock(message.payload);
                 break;
             case 'LOCK':
-                response = handleLock();
+                response = await handleLock();
                 break;
             case 'GET_UNLOCKED':
                 response = await handleGetUnlocked();
@@ -362,6 +543,34 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
             case 'GET_PAGE_MATCHES':
                 response = await handleGetPageMatches(message.payload);
                 break;
+            case 'OPEN_POPUP_CREATE':
+                chrome.tabs.create({ url: chrome.runtime.getURL('vault.html?action=create&url=' + encodeURIComponent(message.payload?.url || '')) });
+                response = { success: true };
+                break;
+            case 'GET_IDENTITIES':
+                response = await handleGetIdentities();
+                break;
+            case 'CREATE_IDENTITY':
+                response = await handleCreateIdentity(message.payload);
+                break;
+            case 'UPDATE_IDENTITY':
+                response = await handleUpdateIdentity(message.payload);
+                break;
+            case 'DELETE_IDENTITY':
+                response = await handleDeleteIdentity(message.payload);
+                break;
+            case 'GENERATE_IDENTITY':
+                response = await handleGenerateIdentity(message.payload);
+                break;
+            case 'ASSIGN_ITEM_TO_IDENTITY':
+                response = await handleAssignItemToIdentity(message.payload);
+                break;
+            case 'UNASSIGN_ITEM_FROM_IDENTITY':
+                response = await handleUnassignItemFromIdentity(message.payload);
+                break;
+            case 'UPDATE_ITEM_LAST_USED':
+                response = await handleUpdateItemLastUsed(message.payload);
+                break;
             default:
                 response = { success: false, error: 'Unknown message type' };
         }
@@ -374,4 +583,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
 chrome.runtime.onInstalled.addListener(() => {
     console.log('VaultWares Identity Manager installed');
+    startAutoSync();
 });
+
+startAutoSync();

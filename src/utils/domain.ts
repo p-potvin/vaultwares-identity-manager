@@ -35,3 +35,21 @@ export function getInitials(name: string): string {
     }
     return name.slice(0, 2).toUpperCase();
 }
+
+export function domainMatches(itemDomain: string, pageUrl: string): boolean {
+    const pageDomain = normalizeDomain(pageUrl);
+    const pageFullDomain = getFullDomain(pageUrl);
+    if (!itemDomain || !pageDomain) return false;
+    if (itemDomain === pageDomain) return true;
+    if (pageFullDomain.endsWith('.' + itemDomain)) return true;
+    if (itemDomain.endsWith('.' + pageDomain)) return true;
+    return false;
+}
+
+export function urlMatches(itemUrl: string, pageUrl: string): boolean {
+    if (!itemUrl || !pageUrl) return false;
+    const itemDomain = normalizeDomain(itemUrl);
+    const pageDomain = normalizeDomain(pageUrl);
+    if (!itemDomain || !pageDomain) return false;
+    return domainMatches(itemDomain, pageUrl);
+}

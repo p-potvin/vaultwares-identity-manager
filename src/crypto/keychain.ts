@@ -111,11 +111,36 @@ export async function isInitialized(): Promise<boolean> {
 }
 
 let cachedMasterKey: Uint8Array | null = null;
+const SESSION_KEY = 'vw_session_master_key';
 
-export function setCachedMasterKey(key: Uint8Array | null): void {
+export async function setCachedMasterKey(key: Uint8Array | null): Promise<void> {
     cachedMasterKey = key;
+    if (key) {
+        try {
+            await chrome.storage.session.set({ [SESSION_KEY]: toBase64(key) });
+        } catch {
+            // chrome.storage.session may not be available in all contexts
+        }
+    } else {
+        try {
+            await chrome.storage.session.remove(SESSION_KEY);
+        } catch {
+            // ignore
+        }
+    }
 }
 
-export function getCachedMasterKey(): Uint8Array | null {
-    return cachedMasterKey;
+export async function getCachedMasterKey(): Promise<Uint8Array | null> {
+    if (cachedMasterKey) return cachedMasterKey;
+    try {
+        const result = await chrome.storage.session.get(SESSION_KEY) as Record<string, any>;
+        const stored = result[SESSION_KEY] as string | undefined;
+        if (stored) {
+            cachedMasterKey = fromBase64(stored);
+            return cachedMasterKey;
+        }
+    } catch {
+        // ignore
+    }
+    return null;
 }

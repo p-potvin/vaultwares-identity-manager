@@ -1,4 +1,4 @@
-const API_BASE = 'http://localhost:9001/v1';
+const API_BASE = 'https://api.vaultwares.ca/v1';
 const TOKEN_KEY = 'vw_access_token';
 const REFRESH_TOKEN_KEY = 'vw_refresh_token';
 

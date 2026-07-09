@@ -113,6 +113,34 @@ function createInlineMenu(): HTMLElement | null {
     return menu;
 }
 
+function createNoMatchesItem(menu: HTMLElement, listContainer: HTMLElement): void {
+    const noMatches = document.createElement('div');
+    noMatches.style.cssText = 'padding: 10px 12px; color: rgba(237,230,255,0.5); font-size: 12px; text-align: center;';
+    noMatches.textContent = 'No matching logins found';
+    listContainer.appendChild(noMatches);
+
+    const createBtn = document.createElement('div');
+    createBtn.style.cssText = 'padding: 10px 12px; cursor: pointer; border-radius: 8px; display: flex; align-items: center; gap: 10px; transition: background 0.15s; border-top: 1px solid rgba(255,255,255,0.04); margin-top: 4px;';
+    createBtn.onmouseenter = () => { createBtn.style.background = '#2A2340'; };
+    createBtn.onmouseleave = () => { createBtn.style.background = ''; };
+
+    const plusIcon = document.createElement('div');
+    plusIcon.style.cssText = 'width: 28px; height: 28px; border-radius: 6px; background: #2A2340; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; color: #D6A441; flex-shrink: 0;';
+    plusIcon.textContent = '+';
+    createBtn.appendChild(plusIcon);
+
+    const label = document.createElement('div');
+    label.style.cssText = 'font-size: 13px; font-weight: 500; color: #D6A441;';
+    label.textContent = 'Create new login for this site';
+    createBtn.appendChild(label);
+
+    createBtn.onclick = () => {
+        chrome.runtime.sendMessage({ type: 'OPEN_POPUP_CREATE', payload: { url: window.location.href } });
+        menu.remove();
+    };
+    listContainer.appendChild(createBtn);
+}
+
 function showInlineMenuNear(menu: HTMLElement, input: HTMLInputElement): void {
     const rect = input.getBoundingClientRect();
     menu.style.top = `${rect.bottom + window.scrollY + 4}px`;
@@ -146,23 +174,28 @@ function initContentScript(): void {
 
     const passwordFields = detection.fields.filter(f => f.role === 'password' || f.role === 'email' || f.role === 'username' || f.role === 'cardNumber' || f.role === 'totp');
 
-    for (const field of passwordFields) {
-        field.element.addEventListener('focus', () => {
-            if (currentMenu) currentMenu.remove();
-            currentInput = field.element;
+    function loadAndShowMatches(input: HTMLInputElement): void {
+        if (currentMenu) currentMenu.remove();
+        currentInput = input;
 
-            chrome.runtime.sendMessage(
-                { type: 'GET_PAGE_MATCHES', payload: { url: window.location.href } },
-                (response) => {
-                    if (!response?.success || !response.data?.length) return;
+        chrome.runtime.sendMessage(
+            { type: 'GET_PAGE_MATCHES', payload: { url: window.location.href } },
+            (response) => {
+                currentMenu = createInlineMenu();
+                if (!currentMenu) return;
 
-                    currentMenu = createInlineMenu();
-                    if (!currentMenu) return;
+                const listContainer = currentMenu.querySelector('#vw-inline-menu-list');
+                if (!listContainer) return;
 
-                    const listContainer = currentMenu.querySelector('#vw-inline-menu-list');
-                    if (!listContainer) return;
+                if (!response?.success || !response.data?.length) {
+                    createNoMatchesItem(currentMenu, listContainer as HTMLElement);
+                } else {
+                    const items: any[] = response.data;
+                    const withIdentity = items.filter((i: any) => i.identityId);
+                    const withoutIdentity = items.filter((i: any) => !i.identityId);
+                    const identityIds = [...new Set(withIdentity.map((i: any) => i.identityId))];
 
-                    for (const item of response.data) {
+                    const renderitem = (item: any) => {
                         const itemEl = document.createElement('div');
                         itemEl.style.cssText = 'padding: 10px 12px; cursor: pointer; border-radius: 8px; display: flex; align-items: center; gap: 10px; transition: background 0.15s;';
                         itemEl.onmouseenter = () => { itemEl.style.background = '#2A2340'; };
@@ -199,19 +232,60 @@ function initContentScript(): void {
                                 fillData.cvv = item.data.cvv || '';
                             }
                             fillForm(detection.fields, fillData);
+                            chrome.runtime.sendMessage({ type: 'UPDATE_ITEM_LAST_USED', payload: { itemId: item.id } });
                             currentMenu?.remove();
                             currentMenu = null;
                         };
 
                         listContainer.appendChild(itemEl);
+                    };
+
+                    for (const identityId of identityIds) {
+                        const idItems = withIdentity.filter((i: any) => i.identityId === identityId);
+                        if (idItems.length === 0) continue;
+
+                        const header = document.createElement('div');
+                        header.style.cssText = 'padding: 6px 12px 2px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: rgba(214,164,65,0.7);';
+                        header.textContent = idItems[0].metadata.label?.split(' ')[0] || 'Identity';
+                        listContainer.appendChild(header);
+
+                        idItems.forEach(renderitem);
                     }
 
-                    if (currentMenu && currentInput) {
-                        showInlineMenuNear(currentMenu, currentInput);
+                    if (withoutIdentity.length > 0 && identityIds.length > 0) {
+                        const divider = document.createElement('div');
+                        divider.style.cssText = 'height: 1px; background: rgba(255,255,255,0.04); margin: 4px 0;';
+                        listContainer.appendChild(divider);
                     }
-                },
-            );
+                    withoutIdentity.forEach(renderitem);
+                }
+
+                if (currentMenu && currentInput) {
+                    showInlineMenuNear(currentMenu, currentInput);
+                }
+            },
+        );
+    }
+
+    for (const field of passwordFields) {
+        field.element.addEventListener('focus', () => {
+            loadAndShowMatches(field.element);
         });
+    }
+
+    if (detection.type === 'login' && detection.score >= 60) {
+        const firstField = passwordFields[0];
+        if (firstField) {
+            setTimeout(() => {
+                if (document.activeElement === firstField.element) return;
+                loadAndShowMatches(firstField.element);
+                setTimeout(() => {
+                    if (currentMenu && !document.activeElement?.closest('#vw-inline-menu')) {
+                        currentMenu.style.display = 'none';
+                    }
+                }, 4000);
+            }, 800);
+        }
     }
 
     document.addEventListener('click', (e) => {
@@ -227,3 +301,17 @@ if (document.readyState === 'interactive' || document.readyState === 'complete')
 } else {
     document.addEventListener('DOMContentLoaded', initContentScript);
 }
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message.type === 'AUTOFILL') {
+        const detection = detectForms();
+        if (detection.type === 'none') {
+            sendResponse({ success: false, error: 'No form detected on this page' });
+            return true;
+        }
+        const fillData: Record<string, string> = message.payload || {};
+        fillForm(detection.fields, fillData);
+        sendResponse({ success: true });
+    }
+    return true;
+});

@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     Shield, Lock, Key, RefreshCw, Copy, Check, Loader2, ExternalLink,
-    Clock, Search, ChevronRight
+    Clock, Search, ChevronRight, Wand2, Plus, User, Sparkles
 } from 'lucide-react';
 import { generatePassword, measurePasswordStrength, strengthLabel, strengthColor } from '../utils/password-generator';
 import { generateTotpCode, getTotpRemainingSeconds } from '../utils/totp';
 import { normalizeDomain, getFaviconUrl } from '../utils/domain';
-import type { VaultItem, LoginItem, TotpItem } from '../types';
+import type { VaultItem, LoginItem, TotpItem, VaultItemMetadata, Identity } from '../types';
 
 function send<T>(msg: { type: string; payload?: any }): Promise<{ success: boolean; data?: T; error?: string }> {
     return chrome.runtime.sendMessage(msg);
@@ -21,6 +21,7 @@ export default function App() {
     const [password, setPassword] = useState('');
     const [copied, setCopied] = useState(false);
     const [matches, setMatches] = useState<VaultItem[]>([]);
+    const [identities, setIdentities] = useState<Identity[]>([]);
     const [currentTab, setCurrentTab] = useState<chrome.tabs.Tab | null>(null);
     const [itemCount, setItemCount] = useState(0);
 
@@ -42,6 +43,11 @@ export default function App() {
         if (resp.success && resp.data) setMatches(resp.data);
     }, []);
 
+    const loadIdentities = useCallback(async () => {
+        const resp = await send<Identity[]>({ type: 'GET_IDENTITIES' });
+        if (resp.success && resp.data) setIdentities(resp.data);
+    }, []);
+
     const loadItemCount = useCallback(async () => {
         const resp = await send<VaultItem[]>({ type: 'GET_ITEMS' });
         if (resp.success && resp.data) setItemCount(resp.data.length);
@@ -57,11 +63,18 @@ export default function App() {
         if (unlocked) {
             loadMatches();
             loadItemCount();
+            loadIdentities();
         }
-    }, [unlocked, loadMatches, loadItemCount]);
+    }, [unlocked, loadMatches, loadItemCount, loadIdentities]);
 
-    const generateNewPassword = () => {
-        setPassword(generatePassword({ length: 20, uppercase: true, lowercase: true, numbers: true, symbols: true }));
+    const [showQuickGen, setShowQuickGen] = useState(false);
+    const [creating, setCreating] = useState(false);
+    const [created, setCreated] = useState(false);
+
+    const generateNewPassword = async () => {
+        const { generateFromPreset, PRESETS } = await import('../utils/password-generator');
+        const preset = PRESETS[0];
+        setPassword(await generateFromPreset(preset));
     };
 
     const copyPassword = () => {
@@ -90,6 +103,58 @@ export default function App() {
 
     const openOnboarding = () => {
         chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
+        window.close();
+    };
+
+    const handleCreateItemFromTab = async () => {
+        if (!currentTab?.url) return;
+        setCreating(true);
+        const tabUrl = currentTab.url;
+        const tabDomain = normalizeDomain(tabUrl);
+        const favicon = getFaviconUrl(tabUrl);
+        const generatedPw = password || await (async () => {
+            const { generateFromPreset, PRESETS } = await import('../utils/password-generator');
+            return generateFromPreset(PRESETS[0]);
+        })();
+        const data: LoginItem = {
+            url: tabUrl,
+            username: '',
+            password: generatedPw,
+            notes: '',
+            totpSecret: '',
+        };
+        const metadata: VaultItemMetadata = {
+            label: tabDomain || 'New Login',
+            domain: tabDomain,
+            iconRef: favicon,
+            tags: [],
+            favorite: false,
+        };
+        const resp = await send({ type: 'CREATE_ITEM', payload: { itemType: 'login', data, metadata } });
+        setCreating(false);
+        if (resp.success) {
+            setCreated(true);
+            setTimeout(() => setCreated(false), 2000);
+            loadItemCount();
+            loadMatches();
+        }
+    };
+
+    const handleAutofill = async (item: VaultItem) => {
+        if (item.itemType !== 'login') return;
+        const login = item.data as LoginItem;
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) return;
+        chrome.tabs.sendMessage(tab.id, {
+            type: 'AUTOFILL',
+            payload: {
+                username: login.username,
+                password: login.password,
+                email: login.username,
+                totp: login.totpSecret || '',
+            },
+        });
+        send({ type: 'UPDATE_ITEM_LAST_USED', payload: { itemId: item.id } });
         window.close();
     };
 
@@ -163,57 +228,122 @@ export default function App() {
                     <Shield className="w-5 h-5 text-vw-gold" />
                     <span className="text-sm font-semibold text-white">VaultWares</span>
                 </div>
-                <button onClick={openVault} className="text-vw-console-text-secondary hover:text-white" title="Open full vault">
-                    <ExternalLink className="w-4 h-4" />
+                <button onClick={openVault} className="flex items-center gap-1.5 text-vw-console-text-secondary hover:text-white text-xs" title="Open full vault">
+                    <ExternalLink className="w-4 h-4" /> Open Vault
                 </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {/* Page matches */}
-                {domain && (
-                    <div>
-                        <div className="flex items-center gap-1.5 mb-2">
-                            <Search className="w-3 h-3 text-vw-console-text-secondary" />
-                            <span className="text-[11px] font-medium text-vw-console-text-secondary uppercase tracking-wider">
-                                Matches for {domain}
-                            </span>
-                        </div>
-                        {matches.length === 0 ? (
-                            <p className="text-xs text-vw-console-text-secondary/60 px-1">No items for this site.</p>
-                        ) : (
-                            <div className="space-y-1.5">
-                                {matches.slice(0, 5).map((item) => (
-                                    <PopupItemRow key={item.id} item={item} />
+                {/* Page matches — identities + unassigned logins sorted by last used */}
+                {domain && (() => {
+                    const matchesWithIdentity = matches.filter(m => m.identityId);
+                    const unassignedMatches = matches.filter(m => !m.identityId);
+                    const identityIds = [...new Set(matchesWithIdentity.map(m => m.identityId))];
+                    const matchingIdentities = identities.filter(id => identityIds.includes(id.id));
+
+                    const sortedIdentities = matchingIdentities.sort((a, b) => {
+                        const aLast = Math.max(...matchesWithIdentity.filter(m => m.identityId === a.id).map(m => m.lastUsedAt ? new Date(m.lastUsedAt).getTime() : 0));
+                        const bLast = Math.max(...matchesWithIdentity.filter(m => m.identityId === b.id).map(m => m.lastUsedAt ? new Date(m.lastUsedAt).getTime() : 0));
+                        return bLast - aLast;
+                    });
+                    const sortedUnassigned = unassignedMatches.sort((a, b) => {
+                        const aTime = a.lastUsedAt ? new Date(a.lastUsedAt).getTime() : 0;
+                        const bTime = b.lastUsedAt ? new Date(b.lastUsedAt).getTime() : 0;
+                        return bTime - aTime;
+                    });
+
+                    if (matches.length === 0) {
+                        return (
+                            <div>
+                                <div className="flex items-center gap-1.5 mb-2">
+                                    <Search className="w-3 h-3 text-vw-console-text-secondary" />
+                                    <span className="text-[11px] font-medium text-vw-console-text-secondary uppercase tracking-wider">
+                                        Matches for {domain}
+                                    </span>
+                                </div>
+                                <p className="text-xs text-vw-console-text-secondary/60 px-1">No items for this site.</p>
+                            </div>
+                        );
+                    }
+
+                    return (
+                        <div>
+                            <div className="flex items-center gap-1.5 mb-2">
+                                <Search className="w-3 h-3 text-vw-console-text-secondary" />
+                                <span className="text-[11px] font-medium text-vw-console-text-secondary uppercase tracking-wider">
+                                    Matches for {domain}
+                                </span>
+                            </div>
+                            <div className="space-y-2">
+                                {sortedIdentities.map((identity) => {
+                                    const idMatches = matchesWithIdentity.filter(m => m.identityId === identity.id);
+                                    return (
+                                        <div key={identity.id} className="space-y-1">
+                                            <div className="flex items-center gap-2 px-1">
+                                                <div className="w-5 h-5 rounded bg-vw-console-surface flex items-center justify-center flex-shrink-0 overflow-hidden">
+                                                    {identity.facePhoto ? (
+                                                        <img src={identity.facePhoto} alt="" className="w-full h-full object-cover" />
+                                                    ) : (
+                                                        <User className="w-3 h-3 text-vw-gold" />
+                                                    )}
+                                                </div>
+                                                <span className="text-[10px] font-medium text-vw-console-text-secondary truncate">{identity.fullName}</span>
+                                            </div>
+                                            {idMatches.slice(0, 3).map((item) => (
+                                                <PopupItemRow key={item.id} item={item} onAutofill={handleAutofill} />
+                                            ))}
+                                        </div>
+                                    );
+                                })}
+                                {sortedUnassigned.length > 0 && sortedIdentities.length > 0 && (
+                                    <div className="border-t border-vw-console-border pt-1" />
+                                )}
+                                {sortedUnassigned.slice(0, 5).map((item) => (
+                                    <PopupItemRow key={item.id} item={item} onAutofill={handleAutofill} />
                                 ))}
                             </div>
-                        )}
-                    </div>
-                )}
+                        </div>
+                    );
+                })()}
 
-                {/* Quick password */}
-                <div className="vw-card p-3.5">
-                    <div className="flex items-center justify-between mb-2">
-                        <span className="text-[11px] font-medium text-vw-console-text-secondary uppercase tracking-wider">Quick Password</span>
-                        <button onClick={generateNewPassword} className="text-vw-console-text-secondary hover:text-white">
-                            <RefreshCw className="w-3.5 h-3.5" />
-                        </button>
+                {/* Quick password - hidden behind button */}
+                {showQuickGen ? (
+                    <div className="vw-card p-3.5">
+                        <div className="flex items-center justify-between mb-2">
+                            <span className="text-[11px] font-medium text-vw-console-text-secondary uppercase tracking-wider">Quick Password</span>
+                            <div className="flex items-center gap-1.5">
+                                <button onClick={generateNewPassword} className="text-vw-console-text-secondary hover:text-white">
+                                    <RefreshCw className="w-3.5 h-3.5" />
+                                </button>
+                                <button onClick={() => setShowQuickGen(false)} className="text-vw-console-text-secondary hover:text-white">
+                                    <span className="text-[10px]">hide</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 mb-2">
+                            <input
+                                type="text"
+                                readOnly
+                                value={password}
+                                className="flex-1 px-2.5 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-white font-mono text-xs"
+                            />
+                            <button onClick={copyPassword} className="px-2 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-vw-console-text-secondary hover:text-white">
+                                {copied ? <Check className="w-3.5 h-3.5 text-vw-signal-online" /> : <Copy className="w-3.5 h-3.5" />}
+                            </button>
+                        </div>
+                        <div className="h-1 bg-vw-console-surface rounded-full overflow-hidden">
+                            <div className="h-full rounded-full transition-all" style={{ width: `${((score + 1) / 5) * 100}%`, background: strengthColor(score) }} />
+                        </div>
+                        <p className="text-[10px] text-right text-vw-console-text-secondary mt-0.5">{strengthLabel(score)}</p>
                     </div>
-                    <div className="flex items-center gap-2 mb-2">
-                        <input
-                            type="text"
-                            readOnly
-                            value={password}
-                            className="flex-1 px-2.5 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-white font-mono text-xs"
-                        />
-                        <button onClick={copyPassword} className="px-2 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-vw-console-text-secondary hover:text-white">
-                            {copied ? <Check className="w-3.5 h-3.5 text-vw-signal-online" /> : <Copy className="w-3.5 h-3.5" />}
-                        </button>
-                    </div>
-                    <div className="h-1 bg-vw-console-surface rounded-full overflow-hidden">
-                        <div className="h-full rounded-full transition-all" style={{ width: `${((score + 1) / 5) * 100}%`, background: strengthColor(score) }} />
-                    </div>
-                    <p className="text-[10px] text-right text-vw-console-text-secondary mt-0.5">{strengthLabel(score)}</p>
-                </div>
+                ) : (
+                    <button
+                        onClick={() => { setShowQuickGen(true); generateNewPassword(); }}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 bg-vw-console-surface border border-vw-console-border rounded-lg text-xs text-vw-console-text-secondary hover:text-white hover:border-vw-gold/30 transition-colors"
+                    >
+                        <Wand2 className="w-3.5 h-3.5" /> Generate Quick Password
+                    </button>
+                )}
 
                 {/* Stats */}
                 <div className="flex gap-2">
@@ -236,18 +366,23 @@ export default function App() {
                 >
                     <Lock className="w-3.5 h-3.5" /> Lock
                 </button>
-                <button onClick={openVault} className="flex items-center gap-1 text-xs text-vw-gold hover:underline">
-                    Open Vault <ChevronRight className="w-3 h-3" />
+                <button
+                    onClick={handleCreateItemFromTab}
+                    disabled={creating || !currentTab?.url}
+                    className="flex items-center gap-1.5 text-xs text-vw-gold hover:underline disabled:opacity-50"
+                >
+                    {created ? <><Check className="w-3 h-3" /> Saved!</> : creating ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Plus className="w-3 h-3" /> New Item for this site</>}
                 </button>
             </div>
         </div>
     );
 }
 
-function PopupItemRow({ item }: { item: VaultItem }) {
+function PopupItemRow({ item, onAutofill }: { item: VaultItem; onAutofill: (item: VaultItem) => void }) {
     const [showTotp, setShowTotp] = useState(false);
     const [totpCode, setTotpCode] = useState('');
     const [totpSeconds, setTotpSeconds] = useState(30);
+    const [copiedField, setCopiedField] = useState('');
 
     useEffect(() => {
         if (showTotp && item.itemType === 'totp') {
@@ -263,6 +398,13 @@ function PopupItemRow({ item }: { item: VaultItem }) {
     }, [showTotp, item]);
 
     const loginData = item.itemType === 'login' ? item.data as LoginItem : null;
+
+    const copyField = (e: React.MouseEvent, value: string, field: string) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(value);
+        setCopiedField(field);
+        setTimeout(() => setCopiedField(''), 1200);
+    };
 
     return (
         <div className="flex items-center gap-2.5 p-2 bg-vw-console-surface rounded-lg hover:bg-vw-console-raised transition-colors cursor-pointer group">
@@ -286,10 +428,29 @@ function PopupItemRow({ item }: { item: VaultItem }) {
             )}
             {loginData?.username && (
                 <button
-                    onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(loginData.username); }}
+                    onClick={(e) => copyField(e, loginData.username, 'username')}
                     className="text-vw-console-text-secondary hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Copy username"
                 >
-                    <Copy className="w-3.5 h-3.5" />
+                    {copiedField === 'username' ? <Check className="w-3.5 h-3.5 text-vw-signal-online" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+            )}
+            {loginData?.password && (
+                <button
+                    onClick={(e) => copyField(e, loginData.password, 'password')}
+                    className="text-vw-console-text-secondary hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Copy password"
+                >
+                    {copiedField === 'password' ? <Check className="w-3.5 h-3.5 text-vw-signal-online" /> : <Key className="w-3.5 h-3.5" />}
+                </button>
+            )}
+            {loginData && (
+                <button
+                    onClick={(e) => { e.stopPropagation(); onAutofill(item); }}
+                    className="text-vw-gold hover:scale-110 transition-transform opacity-0 group-hover:opacity-100"
+                    title="Autofill"
+                >
+                    <ChevronRight className="w-3.5 h-3.5" />
                 </button>
             )}
             {showTotp && (
