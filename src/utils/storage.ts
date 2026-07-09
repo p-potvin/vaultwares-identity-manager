@@ -1,73 +1,50 @@
-import type { VaultData, Identity, Credential, VaultSettings } from '../types';
+import type { EncryptedVaultItem, VaultItem, VaultSettings } from '../types';
+import { DEFAULT_SETTINGS } from '../types';
 
-const DEFAULT_SETTINGS: VaultSettings = {
-    skin: 'slate',
-    autoDetect: true,
-    autoFill: false,
-    passwordLength: 16,
-    passwordComplexity: 'maximum',
-};
+const VAULT_ITEMS_KEY = 'vw_vault_items';
+const SETTINGS_KEY = 'vw_settings';
+const SYNC_CURSOR_KEY = 'vw_sync_cursor';
 
-const DEFAULT_VAULT: VaultData = {
-    identities: [],
-    credentials: [],
-    settings: DEFAULT_SETTINGS,
-};
+export async function getEncryptedItems(): Promise<EncryptedVaultItem[]> {
+    const result = await chrome.storage.local.get(VAULT_ITEMS_KEY) as Record<string, any>;
+    return (result[VAULT_ITEMS_KEY] as EncryptedVaultItem[]) ?? [];
+}
 
-export const getVault = async (): Promise<VaultData> => {
-    const result = await chrome.storage.local.get('vault');
-    return (result['vault'] as VaultData) ?? structuredClone(DEFAULT_VAULT);
-};
-
-export const saveVault = async (vault: VaultData): Promise<void> => {
-    await chrome.storage.local.set({ vault });
-};
-
-export const getSettings = async (): Promise<VaultSettings> => {
-    const vault = await getVault();
-    return vault.settings;
-};
-
-export const updateSettings = async (settings: Partial<VaultSettings>): Promise<void> => {
-    const vault = await getVault();
-    vault.settings = { ...vault.settings, ...settings };
-    await saveVault(vault);
-};
-
-export const saveIdentity = async (identity: Identity): Promise<void> => {
-    const vault = await getVault();
-    const idx = vault.identities.findIndex(i => i.id === identity.id);
-
+export async function saveEncryptedItem(item: EncryptedVaultItem): Promise<void> {
+    const items = await getEncryptedItems();
+    const idx = items.findIndex(i => i.id === item.id);
     if (idx >= 0) {
-        vault.identities[idx] = identity;
+        items[idx] = item;
     } else {
-        vault.identities.push(identity);
+        items.push(item);
     }
+    await chrome.storage.local.set({ [VAULT_ITEMS_KEY]: items });
+}
 
-    await saveVault(vault);
-};
+export async function deleteEncryptedItem(id: string): Promise<void> {
+    const items = await getEncryptedItems();
+    const filtered = items.filter(i => i.id !== id);
+    await chrome.storage.local.set({ [VAULT_ITEMS_KEY]: filtered });
+}
 
-export const deleteIdentity = async (id: string): Promise<void> => {
-    const vault = await getVault();
-    vault.identities = vault.identities.filter(i => i.id !== id);
-    await saveVault(vault);
-};
+export async function getSettings(): Promise<VaultSettings> {
+    const result = await chrome.storage.local.get(SETTINGS_KEY) as Record<string, any>;
+    return (result[SETTINGS_KEY] as VaultSettings) ?? DEFAULT_SETTINGS;
+}
 
-export const saveCredential = async (credential: Credential): Promise<void> => {
-    const vault = await getVault();
-    const idx = vault.credentials.findIndex(c => c.id === credential.id);
+export async function saveSettings(settings: VaultSettings): Promise<void> {
+    await chrome.storage.local.set({ [SETTINGS_KEY]: settings });
+}
 
-    if (idx >= 0) {
-        vault.credentials[idx] = credential;
-    } else {
-        vault.credentials.push(credential);
-    }
+export async function getSyncCursor(): Promise<string | null> {
+    const result = await chrome.storage.local.get(SYNC_CURSOR_KEY) as Record<string, any>;
+    return (result[SYNC_CURSOR_KEY] as string) ?? null;
+}
 
-    await saveVault(vault);
-};
+export async function setSyncCursor(cursor: string): Promise<void> {
+    await chrome.storage.local.set({ [SYNC_CURSOR_KEY]: cursor });
+}
 
-export const deleteCredential = async (id: string): Promise<void> => {
-    const vault = await getVault();
-    vault.credentials = vault.credentials.filter(c => c.id !== id);
-    await saveVault(vault);
-};
+export async function replaceAllEncryptedItems(items: EncryptedVaultItem[]): Promise<void> {
+    await chrome.storage.local.set({ [VAULT_ITEMS_KEY]: items });
+}

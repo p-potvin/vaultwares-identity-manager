@@ -6,10 +6,11 @@ const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 
 module.exports = {
     entry: {
-        background: './src/background/background.ts',
-        content: './src/content/content.ts',
-        popup: './src/popup/popup.ts',
-        vault: './src/vault/vault.ts',
+        background: './src/background/index.ts',
+        content: './src/content/index.ts',
+        popup: './src/popup/index.tsx',
+        vault: './src/vault/index.tsx',
+        onboarding: './src/onboarding/index.tsx',
     },
     output: {
         path: path.resolve(__dirname, 'dist'),
@@ -17,32 +18,37 @@ module.exports = {
         clean: true,
     },
     resolve: {
-        extensions: ['.ts', '.js'],
+        extensions: ['.tsx', '.ts', '.js', '.jsx'],
     },
     module: {
         rules: [
             {
-                test: /\.ts$/,
+                test: /\.tsx?$/,
                 use: 'ts-loader',
                 exclude: /node_modules/,
             },
             {
                 test: /\.css$/,
-                use: [MiniCssExtractPlugin.loader, 'css-loader'],
+                use: [MiniCssExtractPlugin.loader, 'css-loader', 'postcss-loader'],
             },
         ],
     },
     plugins: [
         new MiniCssExtractPlugin({ filename: '[name].css' }),
         new HtmlWebpackPlugin({
-            template: './src/popup/popup.html',
+            template: './src/popup/index.html',
             filename: 'popup.html',
             chunks: ['popup'],
         }),
         new HtmlWebpackPlugin({
-            template: './src/vault/vault.html',
+            template: './src/vault/index.html',
             filename: 'vault.html',
             chunks: ['vault'],
+        }),
+        new HtmlWebpackPlugin({
+            template: './src/onboarding/index.html',
+            filename: 'onboarding.html',
+            chunks: ['onboarding'],
         }),
         new CopyWebpackPlugin({
             patterns: [

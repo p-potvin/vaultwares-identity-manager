@@ -1,23 +1,33 @@
 {
     "manifest_version": 3,
     "name": "VaultWares — Identity Manager",
-    "version": "1.0.0",
-    "description": "Detect sign-up forms and fill them with generated identities and strong passwords. Includes a full identity & password vault.",
+    "version": "2.0.0",
+    "description": "PQC zero-knowledge password, identity, card, and TOTP vault with encrypted sync.",
     "permissions": [
         "storage",
         "activeTab",
         "scripting",
-        "tabs"
+        "tabs",
+        "identity"
+    ],
+    "host_permissions": [
+        "<all_urls>"
     ],
     "background": {
-        "service_worker": "background.js"
+        "service_worker": "background.js",
+        "scripts": ["background.js"]
+    },
+    "browser_specific_settings": {
+        "gecko": {
+            "id": "vault@vaultwares.com",
+            "strict_min_version": "121.0"
+        }
     },
     "content_scripts": [
         {
             "matches": ["<all_urls>"],
             "js": ["content.js"],
-            "run_at": "document_idle",
-            "css": ["content.css"]
+            "run_at": "document_idle"
         }
     ],
     "action": {
@@ -35,7 +45,7 @@
     },
     "web_accessible_resources": [
         {
-            "resources": ["vault.html", "icons/*"],
+            "resources": ["vault.html", "onboarding.html", "icons/*"],
             "matches": ["<all_urls>"]
         }
     ]

@@ -1,0 +1,302 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+    Shield, Lock, Key, RefreshCw, Copy, Check, Loader2, ExternalLink,
+    Clock, Search, ChevronRight
+} from 'lucide-react';
+import { generatePassword, measurePasswordStrength, strengthLabel, strengthColor } from '../utils/password-generator';
+import { generateTotpCode, getTotpRemainingSeconds } from '../utils/totp';
+import { normalizeDomain, getFaviconUrl } from '../utils/domain';
+import type { VaultItem, LoginItem, TotpItem } from '../types';
+
+function send<T>(msg: { type: string; payload?: any }): Promise<{ success: boolean; data?: T; error?: string }> {
+    return chrome.runtime.sendMessage(msg);
+}
+
+export default function App() {
+    const [initialized, setInitialized] = useState<boolean | null>(null);
+    const [unlocked, setUnlocked] = useState(false);
+    const [pin, setPin] = useState('');
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [password, setPassword] = useState('');
+    const [copied, setCopied] = useState(false);
+    const [matches, setMatches] = useState<VaultItem[]>([]);
+    const [currentTab, setCurrentTab] = useState<chrome.tabs.Tab | null>(null);
+    const [itemCount, setItemCount] = useState(0);
+
+    const checkInit = useCallback(async () => {
+        const resp = await send<{ initialized: boolean }>({ type: 'INIT_CHECK' });
+        setInitialized(resp.data?.initialized ?? false);
+    }, []);
+
+    const checkUnlocked = useCallback(async () => {
+        const resp = await send<{ unlocked: boolean }>({ type: 'GET_UNLOCKED' });
+        setUnlocked(resp.data?.unlocked ?? false);
+    }, []);
+
+    const loadMatches = useCallback(async () => {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.url) return;
+        setCurrentTab(tab);
+        const resp = await send<VaultItem[]>({ type: 'GET_PAGE_MATCHES', payload: { url: tab.url } });
+        if (resp.success && resp.data) setMatches(resp.data);
+    }, []);
+
+    const loadItemCount = useCallback(async () => {
+        const resp = await send<VaultItem[]>({ type: 'GET_ITEMS' });
+        if (resp.success && resp.data) setItemCount(resp.data.length);
+    }, []);
+
+    useEffect(() => {
+        checkInit();
+        checkUnlocked();
+        generateNewPassword();
+    }, [checkInit, checkUnlocked]);
+
+    useEffect(() => {
+        if (unlocked) {
+            loadMatches();
+            loadItemCount();
+        }
+    }, [unlocked, loadMatches, loadItemCount]);
+
+    const generateNewPassword = () => {
+        setPassword(generatePassword({ length: 20, uppercase: true, lowercase: true, numbers: true, symbols: true }));
+    };
+
+    const copyPassword = () => {
+        navigator.clipboard.writeText(password);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+    };
+
+    const handleUnlock = async () => {
+        setLoading(true);
+        const resp = await send({ type: 'UNLOCK', payload: { pin } });
+        setLoading(false);
+        if (resp.success) {
+            setUnlocked(true);
+            setPin('');
+            setError('');
+        } else {
+            setError(resp.error ?? 'Unlock failed');
+        }
+    };
+
+    const openVault = () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL('vault.html') });
+        window.close();
+    };
+
+    const openOnboarding = () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
+        window.close();
+    };
+
+    if (initialized === null) {
+        return (
+            <div className="vw-console-shell w-[360px] min-h-[480px] flex items-center justify-center">
+                <Loader2 className="w-6 h-6 text-vw-gold animate-spin" />
+            </div>
+        );
+    }
+
+    if (!initialized) {
+        return (
+            <div className="vw-console-shell w-[360px] min-h-[480px] flex items-center justify-center p-6">
+                <div className="text-center">
+                    <Shield className="w-10 h-10 text-vw-gold mx-auto mb-3" />
+                    <h1 className="text-base font-semibold text-white mb-1">Welcome to VaultWares</h1>
+                    <p className="text-xs text-vw-console-text-secondary mb-4">Set up your encrypted vault to get started.</p>
+                    <button onClick={openOnboarding} className="px-4 py-2 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431]">
+                        Start Setup
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    if (!unlocked) {
+        return (
+            <div className="vw-console-shell w-[360px] min-h-[480px] flex items-center justify-center p-6">
+                <div className="w-full">
+                    <div className="flex items-center gap-2.5 mb-6">
+                        <div className="w-9 h-9 rounded-lg bg-vw-gold/20 flex items-center justify-center">
+                            <Lock className="w-4.5 h-4.5 text-vw-gold" />
+                        </div>
+                        <div>
+                            <h1 className="text-base font-semibold text-white">Unlock Vault</h1>
+                            <p className="text-[11px] text-vw-console-text-secondary">Enter PIN to decrypt locally</p>
+                        </div>
+                    </div>
+                    <input
+                        type="password"
+                        value={pin}
+                        onChange={(e) => setPin(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
+                        placeholder="••••"
+                        className="w-full px-4 py-2.5 bg-vw-console-surface border border-vw-console-border rounded-lg text-white font-mono text-base focus:outline-none focus:border-vw-gold mb-2"
+                        autoFocus
+                    />
+                    {error && <p className="text-xs text-vw-signal-alert mb-2">{error}</p>}
+                    <button
+                        onClick={handleUnlock}
+                        disabled={loading || !pin}
+                        className="w-full py-2.5 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431] disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                        {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+                        Unlock
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    const score = measurePasswordStrength(password);
+    const domain = currentTab?.url ? normalizeDomain(currentTab.url) : '';
+
+    return (
+        <div className="vw-console-shell w-[360px] min-h-[480px] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-vw-console-border">
+                <div className="flex items-center gap-2">
+                    <Shield className="w-5 h-5 text-vw-gold" />
+                    <span className="text-sm font-semibold text-white">VaultWares</span>
+                </div>
+                <button onClick={openVault} className="text-vw-console-text-secondary hover:text-white" title="Open full vault">
+                    <ExternalLink className="w-4 h-4" />
+                </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {/* Page matches */}
+                {domain && (
+                    <div>
+                        <div className="flex items-center gap-1.5 mb-2">
+                            <Search className="w-3 h-3 text-vw-console-text-secondary" />
+                            <span className="text-[11px] font-medium text-vw-console-text-secondary uppercase tracking-wider">
+                                Matches for {domain}
+                            </span>
+                        </div>
+                        {matches.length === 0 ? (
+                            <p className="text-xs text-vw-console-text-secondary/60 px-1">No items for this site.</p>
+                        ) : (
+                            <div className="space-y-1.5">
+                                {matches.slice(0, 5).map((item) => (
+                                    <PopupItemRow key={item.id} item={item} />
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Quick password */}
+                <div className="vw-card p-3.5">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[11px] font-medium text-vw-console-text-secondary uppercase tracking-wider">Quick Password</span>
+                        <button onClick={generateNewPassword} className="text-vw-console-text-secondary hover:text-white">
+                            <RefreshCw className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                    <div className="flex items-center gap-2 mb-2">
+                        <input
+                            type="text"
+                            readOnly
+                            value={password}
+                            className="flex-1 px-2.5 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-white font-mono text-xs"
+                        />
+                        <button onClick={copyPassword} className="px-2 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-vw-console-text-secondary hover:text-white">
+                            {copied ? <Check className="w-3.5 h-3.5 text-vw-signal-online" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                    </div>
+                    <div className="h-1 bg-vw-console-surface rounded-full overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${((score + 1) / 5) * 100}%`, background: strengthColor(score) }} />
+                    </div>
+                    <p className="text-[10px] text-right text-vw-console-text-secondary mt-0.5">{strengthLabel(score)}</p>
+                </div>
+
+                {/* Stats */}
+                <div className="flex gap-2">
+                    <div className="vw-card flex-1 p-3 text-center">
+                        <div className="text-lg font-bold text-vw-gold">{itemCount}</div>
+                        <div className="text-[10px] text-vw-console-text-secondary uppercase tracking-wider">Items</div>
+                    </div>
+                    <div className="vw-card flex-1 p-3 text-center">
+                        <div className="text-lg font-bold text-vw-signal-online">{matches.length}</div>
+                        <div className="text-[10px] text-vw-console-text-secondary uppercase tracking-wider">Matches</div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-4 py-2.5 border-t border-vw-console-border flex items-center justify-between">
+                <button
+                    onClick={async () => { await send({ type: 'LOCK' }); setUnlocked(false); }}
+                    className="flex items-center gap-1.5 text-xs text-vw-console-text-secondary hover:text-white"
+                >
+                    <Lock className="w-3.5 h-3.5" /> Lock
+                </button>
+                <button onClick={openVault} className="flex items-center gap-1 text-xs text-vw-gold hover:underline">
+                    Open Vault <ChevronRight className="w-3 h-3" />
+                </button>
+            </div>
+        </div>
+    );
+}
+
+function PopupItemRow({ item }: { item: VaultItem }) {
+    const [showTotp, setShowTotp] = useState(false);
+    const [totpCode, setTotpCode] = useState('');
+    const [totpSeconds, setTotpSeconds] = useState(30);
+
+    useEffect(() => {
+        if (showTotp && item.itemType === 'totp') {
+            const data = item.data as TotpItem;
+            const update = () => {
+                setTotpCode(generateTotpCode(data.secret, { digits: data.digits, period: data.period, algorithm: data.algorithm }));
+                setTotpSeconds(getTotpRemainingSeconds(data.period));
+            };
+            update();
+            const interval = setInterval(update, 1000);
+            return () => clearInterval(interval);
+        }
+    }, [showTotp, item]);
+
+    const loginData = item.itemType === 'login' ? item.data as LoginItem : null;
+
+    return (
+        <div className="flex items-center gap-2.5 p-2 bg-vw-console-surface rounded-lg hover:bg-vw-console-raised transition-colors cursor-pointer group">
+            <div className="w-7 h-7 rounded bg-vw-console-elevated flex items-center justify-center flex-shrink-0">
+                {item.metadata.iconRef ? (
+                    <img src={item.metadata.iconRef} alt="" className="w-4 h-4 rounded" />
+                ) : (
+                    <Key className="w-3.5 h-3.5 text-vw-gold" />
+                )}
+            </div>
+            <div className="flex-1 min-w-0">
+                <div className="text-xs font-medium text-white truncate">{item.metadata.label}</div>
+                <div className="text-[10px] text-vw-console-text-secondary truncate">
+                    {loginData?.username || (item.data as TotpItem).issuer || item.itemType}
+                </div>
+            </div>
+            {item.itemType === 'totp' && (
+                <button onClick={(e) => { e.stopPropagation(); setShowTotp(!showTotp); }} className="text-vw-signal-online hover:scale-110 transition-transform">
+                    <Clock className="w-3.5 h-3.5" />
+                </button>
+            )}
+            {loginData?.username && (
+                <button
+                    onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(loginData.username); }}
+                    className="text-vw-console-text-secondary hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                    <Copy className="w-3.5 h-3.5" />
+                </button>
+            )}
+            {showTotp && (
+                <div className="absolute right-0 top-full mt-1 bg-vw-console-elevated border border-vw-console-border rounded-lg p-2 text-xs font-mono text-vw-signal-online z-10">
+                    {totpCode} <span className="text-vw-console-text-secondary text-[10px]">{totpSeconds}s</span>
+                </div>
+            )}
+        </div>
+    );
+}
