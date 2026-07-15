@@ -1,11 +1,8 @@
-import { getEncryptedItems, saveEncryptedItem, deleteEncryptedItem, getSyncCursor, setSyncCursor, replaceAllEncryptedItems } from '../utils/storage';
-import { createVaultItem as apiCreateItem, updateVaultItem as apiUpdateItem, deleteVaultItem as apiDeleteItem } from '../api/vault';
+import { getEncryptedItems, getSyncCursor, setSyncCursor, replaceAllEncryptedItems } from '../utils/storage';
 import { pushChanges, pullChanges } from '../api/sync';
 import type { EncryptedVaultItem } from '../types';
 
 const QUEUE_KEY = 'vw_sync_queue';
-const MAX_RETRIES = 5;
-const RETRY_DELAYS = [5000, 15000, 60000, 300000, 900000];
 
 interface QueueEntry {
     id: string;
@@ -72,63 +69,49 @@ export async function enqueueDelete(itemId: string): Promise<void> {
 
 let processing = false;
 
+// A deletion propagated to the server. Deleted items are removed from local
+// storage, so we carry an explicit tombstone (no envelope) in the push batch.
+export interface SyncTombstone {
+    id: string;
+    envelope: null;
+    deletedAt: string;
+}
+
 export async function processQueue(): Promise<{ processed: number; failed: number }> {
     if (processing) return { processed: 0, failed: 0 };
     processing = true;
 
     try {
         const queue = await getQueue();
-        if (queue.length === 0) return { processed: 0, failed: 0 };
+        // The local endpoints speak the batch push/pull protocol rather than
+        // per-item CRUD, so a single fullSync covers all queued work. Queued
+        // deletes become tombstones; everything else is captured by pushing the
+        // current local item set.
+        const tombstones: SyncTombstone[] = queue
+            .filter(q => q.operation === 'delete')
+            .map(q => ({ id: q.itemId, envelope: null, deletedAt: new Date().toISOString() }));
 
-        let processed = 0;
-        let failed = 0;
-        const remaining: QueueEntry[] = [];
-
-        for (const entry of queue) {
-            try {
-                switch (entry.operation) {
-                    case 'create':
-                        await apiCreateItem(entry.envelope);
-                        break;
-                    case 'update':
-                        await apiUpdateItem(entry.itemId, entry.envelope);
-                        break;
-                    case 'delete':
-                        await apiDeleteItem(entry.itemId);
-                        break;
-                }
-                processed++;
-            } catch (e) {
-                entry.attempts++;
-                if (entry.attempts >= MAX_RETRIES) {
-                    console.warn(`Sync queue entry ${entry.id} exceeded max retries, dropping`);
-                    failed++;
-                } else {
-                    remaining.push(entry);
-                    const delay = RETRY_DELAYS[Math.min(entry.attempts - 1, RETRY_DELAYS.length - 1)];
-                    console.warn(`Sync queue entry ${entry.id} failed (attempt ${entry.attempts}), retrying in ${delay}ms`);
-                }
-            }
+        const result = await fullSync(tombstones);
+        if (result.ok) {
+            await saveQueue([]);
+            return { processed: queue.length, failed: 0 };
         }
-
-        await saveQueue(remaining);
-
-        if (processed > 0) {
-            await fullSync();
-        }
-
-        return { processed, failed };
+        // Leave the queue in place; startAutoSync retries on its interval.
+        return { processed: 0, failed: queue.length };
     } finally {
         processing = false;
     }
 }
 
-export async function fullSync(): Promise<{ pushed: number; pulled: number }> {
+export async function fullSync(
+    extraDeletes: SyncTombstone[] = [],
+): Promise<{ pushed: number; pulled: number; ok: boolean }> {
     try {
         const localItems = await getEncryptedItems();
         const cursor = await getSyncCursor();
 
-        const pushResp = await pushChanges(localItems, cursor);
+        const pushPayload = [...localItems, ...extraDeletes];
+        const pushResp = await pushChanges(pushPayload, cursor);
         await setSyncCursor(pushResp.cursor);
 
         const pullResp = await pullChanges(pushResp.cursor);
@@ -137,10 +120,14 @@ export async function fullSync(): Promise<{ pushed: number; pulled: number }> {
         const merged = [...localItems];
         for (const remoteItem of pullResp.items) {
             const idx = merged.findIndex(i => i.id === remoteItem.id);
+            if (remoteItem.deletedAt) {
+                // Remote tombstone wins — drop it locally.
+                if (idx >= 0) merged.splice(idx, 1);
+                continue;
+            }
             if (idx >= 0) {
-                const local = merged[idx];
                 const remoteUpdated = new Date(remoteItem.envelope.updatedAt).getTime();
-                const localUpdated = new Date(local.envelope.updatedAt).getTime();
+                const localUpdated = new Date(merged[idx].envelope.updatedAt).getTime();
                 if (remoteUpdated > localUpdated) {
                     merged[idx] = remoteItem;
                 }
@@ -150,10 +137,10 @@ export async function fullSync(): Promise<{ pushed: number; pulled: number }> {
         }
 
         await replaceAllEncryptedItems(merged);
-        return { pushed: localItems.length, pulled: pullResp.items.length };
+        return { pushed: pushPayload.length, pulled: pullResp.items.length, ok: true };
     } catch (e) {
         console.warn('Full sync failed:', e);
-        return { pushed: 0, pulled: 0 };
+        return { pushed: 0, pulled: 0, ok: false };
     }
 }
 

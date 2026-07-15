@@ -77,6 +77,10 @@ export interface VaultSettings {
     vaultSectionName: string;
     generationEndpointUrl: string;
     autoAssignItemsToIdentity: boolean;
+    // Local vault-warden the extension syncs to, on this machine. Encrypted
+    // envelopes are pushed here instead of a cloud API.
+    syncServerUrl: string;
+    syncLocalToken: string;
 }
 
 export const DEFAULT_SETTINGS: VaultSettings = {
@@ -89,4 +93,6 @@ export const DEFAULT_SETTINGS: VaultSettings = {
     vaultSectionName: 'Vault',
     generationEndpointUrl: '',
     autoAssignItemsToIdentity: true,
+    syncServerUrl: 'http://127.0.0.1:9444/v1',
+    syncLocalToken: '',
 };

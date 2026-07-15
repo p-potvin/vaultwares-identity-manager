@@ -65,23 +65,32 @@ async function handleSetupAccount(payload: { email: string; pin: string }): Prom
         const { kemKeyPair, sigKeyPair, masterKey } = await initKeychain();
         await wrapAndStoreMasterKey(masterKey, payload.pin);
 
-        // Register the SAME public keys we persisted. Generating a second,
-        // separate keypair here left the server holding pubkeys whose secrets
-        // this device never had, breaking any encrypt-to-device flow.
-        const resp = await apiRegister({
-            email: payload.email,
-            kemPublicKey: kemKeyPair.publicKey,
-            sigPublicKey: sigKeyPair.publicKey,
-            deviceName: navigator.userAgent.includes('Firefox') ? 'Firefox Browser' : 'Chrome Browser',
-            deviceClass: 'browser',
-            platform: navigator.platform,
-        });
+        // Vault sync is local (see api/sync.ts), so account registration with the
+        // cloud is optional. Try it for the AI-generation account, but fall back
+        // to a locally-generated device id so the extension works fully offline.
+        let deviceId: string;
+        let deviceRole = 'master';
+        try {
+            const resp = await apiRegister({
+                email: payload.email,
+                kemPublicKey: kemKeyPair.publicKey,
+                sigPublicKey: sigKeyPair.publicKey,
+                deviceName: navigator.userAgent.includes('Firefox') ? 'Firefox Browser' : 'Chrome Browser',
+                deviceClass: 'browser',
+                platform: navigator.platform,
+            });
+            deviceId = resp.deviceId;
+            deviceRole = resp.deviceRole;
+        } catch (e) {
+            console.warn('Cloud registration unavailable, continuing local-only:', (e as Error).message);
+            deviceId = crypto.randomUUID();
+        }
 
-        await setDeviceId(resp.deviceId);
+        await setDeviceId(deviceId);
         await setCachedMasterKey(masterKey);
         resetLockTimer();
 
-        return { success: true, data: { deviceId: resp.deviceId, deviceRole: resp.deviceRole } };
+        return { success: true, data: { deviceId, deviceRole } };
     } catch (e) {
         return { success: false, error: (e as Error).message };
     }
