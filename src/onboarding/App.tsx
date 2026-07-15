@@ -91,26 +91,27 @@ export default function App() {
                             <h2 className="text-lg font-semibold text-[#161320]">Welcome to your zero-knowledge vault</h2>
                             <p className="text-sm text-[#161320]/70">
                                 VaultWares uses post-quantum cryptography (ML-KEM-768, ML-DSA-65) to protect your data.
-                                Your vault is encrypted on your device and never decrypted on our servers.
+                                Your vault is encrypted on this device and syncs only to VaultWarden running on your
+                                own machine — nothing is ever sent to us in a form we could read.
                             </p>
-                            <div className="bg-[#ECE5D8] rounded-lg p-4 space-y-2">
+                            <div className="bg-vw-warm-muted rounded-lg p-4 space-y-2">
                                 <div className="flex items-start gap-2">
-                                    <Check className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
+                                    <Check className="w-4 h-4 text-vw-signal-online mt-0.5 flex-shrink-0" />
                                     <span className="text-xs text-[#161320]/80">Passwords, addresses, cards, TOTP, and passkeys</span>
                                 </div>
                                 <div className="flex items-start gap-2">
-                                    <Check className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
-                                    <span className="text-xs text-[#161320]/80">Encrypted sync across devices</span>
+                                    <Check className="w-4 h-4 text-vw-signal-online mt-0.5 flex-shrink-0" />
+                                    <span className="text-xs text-[#161320]/80">Encrypted sync to VaultWarden on this machine</span>
                                 </div>
                                 <div className="flex items-start gap-2">
-                                    <Check className="w-4 h-4 text-green-600 mt-0.5 flex-shrink-0" />
+                                    <Check className="w-4 h-4 text-vw-signal-online mt-0.5 flex-shrink-0" />
                                     <span className="text-xs text-[#161320]/80">Post-quantum cryptography (NIST standardized)</span>
                                 </div>
                             </div>
                         </div>
                         <button
                             onClick={() => setStep('account')}
-                            className="w-full py-3 bg-[#D6A441] text-white rounded-lg font-medium hover:bg-[#C69431] transition-colors"
+                            className="w-full py-3 bg-vw-gold text-white rounded-lg font-medium hover:bg-[color-mix(in_srgb,_var(--vault-console-gold)_80%,_#000)] transition-colors"
                         >
                             Get Started
                         </button>
@@ -130,13 +131,13 @@ export default function App() {
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 placeholder="you@example.com"
-                                className="w-full px-4 py-2.5 bg-white border border-[#161320]/10 rounded-lg text-[#161320] focus:outline-none focus:border-[#D6A441]"
+                                className="w-full px-4 py-2.5 bg-white border border-[#161320]/10 rounded-lg text-[#161320] focus:outline-none focus:border-vw-gold"
                             />
                         </div>
-                        {error && <p className="text-sm text-red-600">{error}</p>}
+                        {error && <p className="text-sm text-vw-signal-alert">{error}</p>}
                         <button
                             onClick={handleAccountNext}
-                            className="w-full py-3 bg-[#D6A441] text-white rounded-lg font-medium hover:bg-[#C69431] transition-colors"
+                            className="w-full py-3 bg-vw-gold text-white rounded-lg font-medium hover:bg-[color-mix(in_srgb,_var(--vault-console-gold)_80%,_#000)] transition-colors"
                         >
                             Continue
                         </button>
@@ -156,7 +157,7 @@ export default function App() {
                                 value={pin}
                                 onChange={(e) => setPin(e.target.value)}
                                 placeholder="••••"
-                                className="w-full px-4 py-2.5 bg-white border border-[#161320]/10 rounded-lg text-[#161320] focus:outline-none focus:border-[#D6A441] font-mono"
+                                className="w-full px-4 py-2.5 bg-white border border-[#161320]/10 rounded-lg text-[#161320] focus:outline-none focus:border-vw-gold font-mono"
                             />
                         </div>
                         <div>
@@ -166,14 +167,14 @@ export default function App() {
                                 value={pinConfirm}
                                 onChange={(e) => setPinConfirm(e.target.value)}
                                 placeholder="••••"
-                                className="w-full px-4 py-2.5 bg-white border border-[#161320]/10 rounded-lg text-[#161320] focus:outline-none focus:border-[#D6A441] font-mono"
+                                className="w-full px-4 py-2.5 bg-white border border-[#161320]/10 rounded-lg text-[#161320] focus:outline-none focus:border-vw-gold font-mono"
                             />
                         </div>
-                        {error && <p className="text-sm text-red-600">{error}</p>}
+                        {error && <p className="text-sm text-vw-signal-alert">{error}</p>}
                         <button
                             onClick={handlePinNext}
                             disabled={loading}
-                            className="w-full py-3 bg-[#D6A441] text-white rounded-lg font-medium hover:bg-[#C69431] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                            className="w-full py-3 bg-vw-gold text-white rounded-lg font-medium hover:bg-[color-mix(in_srgb,_var(--vault-console-gold)_80%,_#000)] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                         >
                             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
                             {loading ? 'Generating keys…' : 'Create Vault'}
@@ -190,8 +191,8 @@ export default function App() {
                                 Store it somewhere safe — we cannot recover it for you.
                             </p>
                         </div>
-                        <div className="bg-[#FFF3CD] border border-[#161320]/10 rounded-lg p-4 flex items-start gap-3">
-                            <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                        <div className="bg-[color-mix(in_srgb,_var(--vault-signal-warning)_22%,_var(--vault-warm-raised))] border border-[#161320]/10 rounded-lg p-4 flex items-start gap-3">
+                            <AlertTriangle className="w-5 h-5 text-vw-signal-warning flex-shrink-0 mt-0.5" />
                             <p className="text-xs text-[#161320]/80">
                                 Without your recovery kit, losing your device means permanent loss of vault access.
                             </p>
@@ -200,7 +201,7 @@ export default function App() {
                             <button
                                 onClick={handleGenerateKit}
                                 disabled={loading}
-                                className="w-full py-3 bg-[#D6A441] text-white rounded-lg font-medium hover:bg-[#C69431] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                                className="w-full py-3 bg-vw-gold text-white rounded-lg font-medium hover:bg-[color-mix(in_srgb,_var(--vault-console-gold)_80%,_#000)] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                             >
                                 {loading && <Loader2 className="w-4 h-4 animate-spin" />}
                                 Generate Recovery Kit
@@ -209,7 +210,7 @@ export default function App() {
                             <>
                                 <button
                                     onClick={handleDownloadKit}
-                                    className="w-full py-3 bg-[#2A2340] text-white rounded-lg font-medium hover:bg-[#453763] transition-colors flex items-center justify-center gap-2"
+                                    className="w-full py-3 bg-vw-console-raised text-white rounded-lg font-medium hover:bg-vw-console-elevated transition-colors flex items-center justify-center gap-2"
                                 >
                                     <Download className="w-4 h-4" />
                                     {kitDownloaded ? 'Downloaded — Download Again' : 'Download Recovery Kit'}
@@ -217,7 +218,7 @@ export default function App() {
                                 {kitDownloaded && (
                                     <button
                                         onClick={handleFinish}
-                                        className="w-full py-3 bg-[#D6A441] text-white rounded-lg font-medium hover:bg-[#C69431] transition-colors flex items-center justify-center gap-2"
+                                        className="w-full py-3 bg-vw-gold text-white rounded-lg font-medium hover:bg-[color-mix(in_srgb,_var(--vault-console-gold)_80%,_#000)] transition-colors flex items-center justify-center gap-2"
                                     >
                                         <Check className="w-4 h-4" />
                                         Open My Vault
@@ -225,7 +226,7 @@ export default function App() {
                                 )}
                             </>
                         )}
-                        {error && <p className="text-sm text-red-600">{error}</p>}
+                        {error && <p className="text-sm text-vw-signal-alert">{error}</p>}
                     </div>
                 )}
             </div>
