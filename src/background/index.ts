@@ -62,7 +62,7 @@ function resetLockTimer(): void {
 
 async function handleSetupAccount(payload: { email: string; pin: string }): Promise<MessageResponse> {
     try {
-        const { kemKeyPair, sigKeyPair, masterKey } = await initKeychain();
+        const { kemPublicKey, sigPublicKey, masterKey } = await initKeychain();
         await wrapAndStoreMasterKey(masterKey, payload.pin);
 
         // Vault sync is local (see api/sync.ts), so account registration with the
@@ -73,8 +73,8 @@ async function handleSetupAccount(payload: { email: string; pin: string }): Prom
         try {
             const resp = await apiRegister({
                 email: payload.email,
-                kemPublicKey: kemKeyPair.publicKey,
-                sigPublicKey: sigKeyPair.publicKey,
+                kemPublicKey,
+                sigPublicKey,
                 deviceName: navigator.userAgent.includes('Firefox') ? 'Firefox Browser' : 'Chrome Browser',
                 deviceClass: 'browser',
                 platform: navigator.platform,
@@ -234,7 +234,7 @@ async function handleGenerateRecoveryKit(payload: { pin: string }): Promise<Mess
         const masterKey = await getCachedMasterKey();
         if (!masterKey) return { success: false, error: 'Vault is locked' };
 
-        const kit = generateRecoveryKit(masterKey, payload.pin);
+        const kit = await generateRecoveryKit(masterKey, payload.pin);
         return { success: true, data: kit };
     } catch (e) {
         return { success: false, error: (e as Error).message };

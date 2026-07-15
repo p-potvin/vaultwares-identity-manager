@@ -75,19 +75,40 @@ export interface SyncPullResponse {
     hasMore: boolean;
 }
 
+/** An AES-GCM blob, base64-encoded. */
+export interface EncBlob {
+    ciphertext: string;
+    nonce: string;
+}
+
+/**
+ * Restores a vault onto a new device/profile: the PIN unwraps the master key,
+ * which in turn decrypts the account KEM/signing secret keys — the keys that
+ * actually open synced envelopes.
+ */
 export interface RecoveryKit {
     version: number;
     kemPublicKey: string;
-    kemSecretKey: string;
-    wrappedMasterKey: string;
+    sigPublicKey: string;
+    /** Account secret keys, encrypted under the master key. */
+    kemSecretKeyEnc: EncBlob;
+    sigSecretKeyEnc: EncBlob;
+    /** Master key, encrypted under the PIN-derived key (via `salt`). */
+    wrappedMasterKey: EncBlob;
     salt: string;
     createdAt: string;
 }
 
+/**
+ * Public keys are stored in the clear; secret keys are encrypted under the
+ * master key, which is itself only recoverable from the PIN. Nothing here
+ * discloses vault contents to someone who can read chrome.storage.local.
+ */
 export interface KeychainState {
-    kemKeyPair: PQCKeyPairBase64 | null;
-    sigKeyPair: PQCKeyPairBase64 | null;
-    masterKey: Uint8Array | null;
+    kemPublicKey: string | null;
+    sigPublicKey: string | null;
+    kemSecretKeyEnc: EncBlob | null;
+    sigSecretKeyEnc: EncBlob | null;
     deviceId: string | null;
 }
 
