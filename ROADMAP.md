@@ -8,6 +8,11 @@ A privacy-first identity vault that lets users:
 - Generate fully fictional but realistic personas for online sign-ups
 - Detect sign-up and login pages in the browser and suggest either a new fictional identity or an existing domain-linked one
 - Manage the same encrypted vault across browser, desktop, iOS, and Android clients
+  - **Blocked today.** Vault sync is local-only (the extension syncs to a
+    `vault-warden` on the same machine), so devices share nothing. Reaching this
+    goal means putting users on their own tailnet and pointing their devices at
+    one shared `vault-warden` over it, then provisioning the account key to each
+    approved device. See `docs/crypto-status.md`.
 
 **Not intended for:** impersonation, KYC bypass, forged identity documents, reference-image cloning, or evasive abuse automation.
 
