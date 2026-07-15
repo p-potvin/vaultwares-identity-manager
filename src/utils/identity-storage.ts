@@ -1,8 +1,22 @@
 import type { Identity, EncryptedVaultItem } from '../types';
-import { encrypt, decrypt, generateSymmetricKey } from '../crypto/symmetric';
-import { encapsulate, decapsulate, sign, verify, toBase64, fromBase64 } from '../crypto/pqc';
+import { encrypt, decrypt } from '../crypto/symmetric';
+import { encapsulate, decapsulate, sign, verify, toBase64, fromBase64, canonicalJSON } from '../crypto/pqc';
 
 const IDENTITIES_KEY = 'vw_identities';
+const ENVELOPE_VERSION = 2;
+
+function identitySignaturePayload(env: {
+    version: number;
+    itemType: string;
+    encapsulatedKey: string;
+    ciphertext: string;
+    nonce: string;
+    metadata: unknown;
+}): Uint8Array {
+    return new TextEncoder().encode(
+        [env.version, env.itemType, env.encapsulatedKey, env.ciphertext, env.nonce, canonicalJSON(env.metadata)].join('|'),
+    );
+}
 
 export async function getEncryptedIdentities(): Promise<EncryptedVaultItem[]> {
     const result = await chrome.storage.local.get(IDENTITIES_KEY) as Record<string, any>;
@@ -47,12 +61,13 @@ export function encryptIdentity(
         address: identity.address,
         facePhoto: identity.facePhoto,
     }));
-    const itemKey = generateSymmetricKey();
-    const { ciphertext, nonce } = encrypt(plaintext, itemKey);
-    const { ciphertext: encapsulatedKey } = encapsulate(kemPublicKey);
+    // KEM-DEM: encrypt the identity (incl. any facePhoto) under the KEM shared
+    // secret rather than a discarded random key. See envelope.ts for the same fix.
+    const { ciphertext: encapsulatedKey, sharedSecret } = encapsulate(kemPublicKey);
+    const { ciphertext, nonce } = encrypt(plaintext, sharedSecret);
 
     const envelope = {
-        version: 1,
+        version: ENVELOPE_VERSION,
         itemType: 'identity',
         ciphertext: toBase64(ciphertext),
         nonce: toBase64(nonce),
@@ -65,10 +80,7 @@ export function encryptIdentity(
         lastUsedAt: identity.lastUsedAt,
     };
 
-    const signPayload = new TextEncoder().encode(
-        envelope.ciphertext + envelope.nonce + JSON.stringify(envelope.metadata),
-    );
-    envelope.signature = toBase64(sign(signPayload, sigSecretKey));
+    envelope.signature = toBase64(sign(identitySignaturePayload(envelope), sigSecretKey));
 
     return { id: identity.id, envelope, deletedAt: identity.deletedAt };
 }
@@ -79,19 +91,19 @@ export function decryptIdentity(
     sigPublicKey: Uint8Array,
 ): Identity {
     const { envelope } = enc;
-    const signPayload = new TextEncoder().encode(
-        envelope.ciphertext + envelope.nonce + JSON.stringify(envelope.metadata),
-    );
+    if (envelope.version !== ENVELOPE_VERSION) {
+        throw new Error(`Unsupported identity envelope version: ${envelope.version}`);
+    }
     const signature = fromBase64(envelope.signature);
-    if (!verify(signPayload, signature, sigPublicKey)) {
+    if (!verify(identitySignaturePayload(envelope), signature, sigPublicKey)) {
         throw new Error('Identity envelope signature verification failed');
     }
 
     const encapsulatedKey = fromBase64(envelope.encapsulatedKey);
-    const itemKey = decapsulate(kemSecretKey, encapsulatedKey);
+    const sharedSecret = decapsulate(kemSecretKey, encapsulatedKey);
     const ciphertext = fromBase64(envelope.ciphertext);
     const nonce = fromBase64(envelope.nonce);
-    const plaintext = decrypt(ciphertext, nonce, itemKey);
+    const plaintext = decrypt(ciphertext, nonce, sharedSecret);
     const data = JSON.parse(new TextDecoder().decode(plaintext));
 
     return {

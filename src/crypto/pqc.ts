@@ -1,5 +1,6 @@
 import { ml_kem768 } from '@noble/post-quantum/ml-kem';
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa';
+import { randomBytes } from '@noble/hashes/utils';
 import type { PQCKeyPair, PQCKeyPairBase64 } from '../types';
 
 export function toBase64(bytes: Uint8Array): string {
@@ -30,12 +31,27 @@ export function encapsulate(publicKey: Uint8Array): { ciphertext: Uint8Array; sh
 }
 
 export function decapsulate(secretKey: Uint8Array, ciphertext: Uint8Array): Uint8Array {
-    return ml_kem768.decapsulate(secretKey, ciphertext);
+    // @noble/post-quantum 0.2.x takes (cipherText, secretKey) in this order.
+    return ml_kem768.decapsulate(ciphertext, secretKey);
 }
 
 export function generateSigKeyPair(): PQCKeyPair {
-    const { publicKey, secretKey } = ml_dsa65.keygen(new Uint8Array(32));
+    // Must use fresh randomness. A fixed seed makes every install share one
+    // signing key, so signatures would prove nothing.
+    const { publicKey, secretKey } = ml_dsa65.keygen(randomBytes(32));
     return { publicKey, secretKey };
+}
+
+/**
+ * Deterministic JSON serialization (keys sorted at every level) so that a
+ * signature computed over an object verifies regardless of property order or
+ * the serializer used on the other side.
+ */
+export function canonicalJSON(value: any): string {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value);
+    if (Array.isArray(value)) return '[' + value.map(canonicalJSON).join(',') + ']';
+    const keys = Object.keys(value).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + canonicalJSON(value[k])).join(',') + '}';
 }
 
 export function sign(message: Uint8Array, secretKey: Uint8Array): Uint8Array {

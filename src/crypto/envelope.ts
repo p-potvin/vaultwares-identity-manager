@@ -1,6 +1,26 @@
-import { encrypt, decrypt, generateSymmetricKey } from './symmetric';
-import { encapsulate, decapsulate, sign, verify, toBase64, fromBase64 } from './pqc';
+import { encrypt, decrypt } from './symmetric';
+import { encapsulate, decapsulate, sign, verify, toBase64, fromBase64, canonicalJSON } from './pqc';
 import type { VaultEnvelope, VaultItem, EncryptedVaultItem, ItemType, VaultItemMetadata } from '../types';
+
+const ENVELOPE_VERSION = 2;
+
+/**
+ * Bytes that a signature commits to. Covers every field an attacker could tamper
+ * with — crucially the encapsulated key and the version/type, not just the
+ * ciphertext — using a canonical encoding so verification is order-independent.
+ */
+function signaturePayload(env: {
+    version: number;
+    itemType: string;
+    encapsulatedKey: string;
+    ciphertext: string;
+    nonce: string;
+    metadata: unknown;
+}): Uint8Array {
+    return new TextEncoder().encode(
+        [env.version, env.itemType, env.encapsulatedKey, env.ciphertext, env.nonce, canonicalJSON(env.metadata)].join('|'),
+    );
+}
 
 function uuid(): string {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -20,12 +40,14 @@ export function createEnvelope(
     deviceId: string,
 ): EncryptedVaultItem {
     const plaintext = new TextEncoder().encode(JSON.stringify(item.data));
-    const itemKey = generateSymmetricKey();
-    const { ciphertext, nonce } = encrypt(plaintext, itemKey);
+    // KEM-DEM: the KEM shared secret *is* the data-encryption key. The previous
+    // code encrypted under a throwaway random key and discarded the shared
+    // secret, so nothing could ever be decrypted.
     const { ciphertext: encapsulatedKey, sharedSecret } = encapsulate(kemPublicKey);
+    const { ciphertext, nonce } = encrypt(plaintext, sharedSecret);
 
     const envelope: VaultEnvelope = {
-        version: 1,
+        version: ENVELOPE_VERSION,
         itemType: item.itemType,
         ciphertext: toBase64(ciphertext),
         nonce: toBase64(nonce),
@@ -38,10 +60,7 @@ export function createEnvelope(
         lastUsedAt: item.lastUsedAt,
     };
 
-    const signPayload = new TextEncoder().encode(
-        envelope.ciphertext + envelope.nonce + JSON.stringify(envelope.metadata),
-    );
-    envelope.signature = toBase64(sign(signPayload, sigSecretKey));
+    envelope.signature = toBase64(sign(signaturePayload(envelope), sigSecretKey));
 
     return { id: item.id, envelope, deletedAt: item.deletedAt };
 }
@@ -53,20 +72,21 @@ export function openEnvelope(
 ): VaultItem {
     const { envelope } = encryptedItem;
 
-    const signPayload = new TextEncoder().encode(
-        envelope.ciphertext + envelope.nonce + JSON.stringify(envelope.metadata),
-    );
+    if (envelope.version !== ENVELOPE_VERSION) {
+        throw new Error(`Unsupported envelope version: ${envelope.version}`);
+    }
+
     const signature = fromBase64(envelope.signature);
-    if (!verify(signPayload, signature, sigPublicKey)) {
+    if (!verify(signaturePayload(envelope), signature, sigPublicKey)) {
         throw new Error('Envelope signature verification failed');
     }
 
     const encapsulatedKey = fromBase64(envelope.encapsulatedKey);
-    const itemKey = decapsulate(kemSecretKey, encapsulatedKey);
+    const sharedSecret = decapsulate(kemSecretKey, encapsulatedKey);
 
     const ciphertext = fromBase64(envelope.ciphertext);
     const nonce = fromBase64(envelope.nonce);
-    const plaintext = decrypt(ciphertext, nonce, itemKey);
+    const plaintext = decrypt(ciphertext, nonce, sharedSecret);
 
     const data = JSON.parse(new TextDecoder().decode(plaintext));
 

@@ -1,7 +1,6 @@
 import { initKeychain, wrapAndStoreMasterKey, unwrapMasterKey, setCachedMasterKey, getCachedMasterKey, setDeviceId, getKeychain, isInitialized, getKemPublicKey, getSigKeyPair, getKemSecretKey, clearKeychain } from '../crypto/keychain';
 import { createEnvelope, openEnvelope, createVaultItem, updateVaultItemTimestamp } from '../crypto/envelope';
 import { generateRecoveryKit, downloadRecoveryKit } from '../crypto/recovery';
-import { generateKemKeyPair, generateSigKeyPair, kemKeyPairToBase64, sigKeyPairToBase64, toBase64, sign } from '../crypto/pqc';
 import { getEncryptedItems, saveEncryptedItem, deleteEncryptedItem, replaceAllEncryptedItems, getSettings, saveSettings, getSyncCursor, setSyncCursor } from '../utils/storage';
 import { getEncryptedIdentities, saveEncryptedIdentity, deleteEncryptedIdentity, encryptIdentity, decryptIdentity } from '../utils/identity-storage';
 import { register as apiRegister } from '../api/auth';
@@ -66,15 +65,13 @@ async function handleSetupAccount(payload: { email: string; pin: string }): Prom
         const { kemKeyPair, sigKeyPair, masterKey } = await initKeychain();
         await wrapAndStoreMasterKey(masterKey, payload.pin);
 
-        const kemKp = generateKemKeyPair();
-        const sigKp = generateSigKeyPair();
-        const kemB64 = kemKeyPairToBase64(kemKp);
-        const sigB64 = sigKeyPairToBase64(sigKp);
-
+        // Register the SAME public keys we persisted. Generating a second,
+        // separate keypair here left the server holding pubkeys whose secrets
+        // this device never had, breaking any encrypt-to-device flow.
         const resp = await apiRegister({
             email: payload.email,
-            kemPublicKey: kemB64.publicKey,
-            sigPublicKey: sigB64.publicKey,
+            kemPublicKey: kemKeyPair.publicKey,
+            sigPublicKey: sigKeyPair.publicKey,
             deviceName: navigator.userAgent.includes('Firefox') ? 'Firefox Browser' : 'Chrome Browser',
             deviceClass: 'browser',
             platform: navigator.platform,
