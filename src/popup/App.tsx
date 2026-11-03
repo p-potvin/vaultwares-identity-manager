@@ -1,18 +1,40 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     Shield, Lock, Key, RefreshCw, Copy, Check, Loader2, ExternalLink,
-    Clock, Search, ChevronRight, Wand2, Plus, User, Sparkles
+    Clock, Search, ChevronRight, ChevronLeft, Wand2, Plus, User, Eye, EyeOff, Pencil, X, Globe, Mail, StickyNote,
 } from 'lucide-react';
-import { generatePassword, measurePasswordStrength, strengthLabel, strengthColor } from '../utils/password-generator';
+import {
+    generateFromPreset, PRESETS, measurePasswordStrength, strengthLabel, strengthColor,
+} from '../utils/password-generator';
 import { generateTotpCode, getTotpRemainingSeconds } from '../utils/totp';
 import { normalizeDomain, getHost, getFaviconUrl, normalizeStoredUrl } from '../utils/domain';
 import { loginIdentifier } from '../types';
-import type { VaultItem, LoginItem, TotpItem, VaultItemMetadata, Identity, VaultSettings } from '../types';
+import type { VaultItem, LoginItem, TotpItem, CardItem, VaultItemMetadata, Identity, VaultSettings } from '../types';
 
 import { useAutoUnlock } from '../utils/use-auto-unlock';
 
-function send<T>(msg: { type: string; payload?: any }): Promise<{ success: boolean; data?: T; error?: string; locked?: boolean }> {
+type Response<T> = { success: boolean; data?: T; error?: string; locked?: boolean };
+
+function send<T>(msg: { type: string; payload?: any }): Promise<Response<T>> {
     return chrome.runtime.sendMessage(msg);
+}
+
+function lastUsedTime(item: VaultItem): number {
+    return item.lastUsedAt ? new Date(item.lastUsedAt).getTime() : 0;
+}
+
+/** Fields a popup search looks at; the vault search uses the same set. */
+function itemMatchesQuery(item: VaultItem, query: string): boolean {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    const haystack = [item.metadata.label, item.metadata.domain ?? '', ...item.metadata.tags];
+    if (item.itemType === 'login') {
+        const login = item.data as LoginItem;
+        haystack.push(login.username ?? '', login.email ?? '', login.url ?? '');
+    } else if (item.itemType === 'totp') {
+        haystack.push((item.data as TotpItem).issuer ?? '');
+    }
+    return haystack.some(value => value.toLowerCase().includes(q));
 }
 
 export default function App() {
@@ -28,15 +50,29 @@ export default function App() {
     const [identities, setIdentities] = useState<Identity[]>([]);
     const [currentTab, setCurrentTab] = useState<chrome.tabs.Tab | null>(null);
     const [itemCount, setItemCount] = useState(0);
+    const [settings, setSettings] = useState<VaultSettings | null>(null);
 
-    const checkInit = useCallback(async () => {
-        const resp = await send<{ initialized: boolean }>({ type: 'INIT_CHECK' });
-        setInitialized(resp.data?.initialized ?? false);
-    }, []);
+    // Search over the whole vault; the list is fetched on the first keystroke
+    // so opening the popup never pays for decrypting everything.
+    const [query, setQuery] = useState('');
+    const [allItems, setAllItems] = useState<VaultItem[] | null>(null);
+    const [searchLoading, setSearchLoading] = useState(false);
 
-    const checkUnlocked = useCallback(async () => {
-        const resp = await send<{ unlocked: boolean }>({ type: 'GET_UNLOCKED' });
-        setUnlocked(resp.data?.unlocked ?? false);
+    // Item detail / edit, without leaving the popup.
+    const [selected, setSelected] = useState<VaultItem | null>(null);
+    const [editing, setEditing] = useState(false);
+
+    useEffect(() => {
+        // Both answers are local storage reads; asking in parallel halves the
+        // time the spinner is visible.
+        void Promise.all([
+            send<{ initialized: boolean }>({ type: 'INIT_CHECK' }),
+            send<{ unlocked: boolean }>({ type: 'GET_UNLOCKED' }),
+        ]).then(([init, state]) => {
+            setUnlocked(state.data?.unlocked ?? false);
+            setInitialized(init.data?.initialized ?? false);
+        });
+        void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => setCurrentTab(tab ?? null));
     }, []);
 
     const loadMatches = useCallback(async () => {
@@ -54,43 +90,46 @@ export default function App() {
         if (resp.success && resp.data) setIdentities(resp.data);
     }, []);
 
+    // A count needs no decryption. This used to be GET_ITEMS — every password
+    // decrypted and copied over runtime messaging just to read `.length`.
     const loadItemCount = useCallback(async () => {
-        const resp = await send<VaultItem[]>({ type: 'GET_ITEMS' });
+        const resp = await send<{ count: number }>({ type: 'GET_ITEM_SUMMARY' });
         if (resp.locked) { setUnlocked(false); return; }
-        if (resp.success && resp.data) setItemCount(resp.data.length);
+        if (resp.success && resp.data) setItemCount(resp.data.count);
     }, []);
 
     useEffect(() => {
-        checkInit();
-        checkUnlocked();
-        generateNewPassword();
-    }, [checkInit, checkUnlocked]);
-
-    useEffect(() => {
         if (!unlocked) return;
-        // Decryption takes a moment; without this the popup shows "no matches"
-        // before the real answer arrives.
         setDataLoading(true);
         void Promise.all([loadMatches(), loadItemCount(), loadIdentities()])
             .finally(() => setDataLoading(false));
+        void send<VaultSettings>({ type: 'GET_SETTINGS' }).then(r => setSettings(r.data ?? null));
     }, [unlocked, loadMatches, loadItemCount, loadIdentities]);
+
+    useEffect(() => {
+        if (!unlocked || !query.trim() || allItems !== null || searchLoading) return;
+        setSearchLoading(true);
+        void send<VaultItem[]>({ type: 'GET_ITEMS' }).then(resp => {
+            if (resp.locked) { setUnlocked(false); return; }
+            setAllItems(resp.data ?? []);
+        }).finally(() => setSearchLoading(false));
+    }, [unlocked, query, allItems, searchLoading]);
 
     const [showQuickGen, setShowQuickGen] = useState(false);
     const [creating, setCreating] = useState(false);
     const [created, setCreated] = useState(false);
 
-    const generateNewPassword = async () => {
-        const { generateFromPreset, PRESETS } = await import('../utils/password-generator');
-        // Honour the configured default; hardcoding PRESETS[0] meant the popup
-        // handed out passwords in a different shape from the vault generator.
-        const settingsResp = await send<VaultSettings>({ type: 'GET_SETTINGS' });
-        const presetId = settingsResp.data?.defaultGeneratorPreset;
-        const preset = PRESETS.find(p => p.id === presetId) ?? PRESETS[0];
-        setPassword(await generateFromPreset(preset));
-    };
+    const presetPassword = useCallback(async (): Promise<string> => {
+        // Honour the configured default so the popup agrees with the vault
+        // generator and the in-page menu.
+        const preset = PRESETS.find(p => p.id === settings?.defaultGeneratorPreset) ?? PRESETS[0];
+        return generateFromPreset(preset);
+    }, [settings]);
+
+    const generateNewPassword = async () => setPassword(await presetPassword());
 
     const copyPassword = () => {
-        navigator.clipboard.writeText(password);
+        void navigator.clipboard.writeText(password);
         setCopied(true);
         setTimeout(() => setCopied(false), 1200);
     };
@@ -119,18 +158,26 @@ export default function App() {
         }
     };
 
+    const tabHost = currentTab?.url ? getHost(currentTab.url) : '';
+    const isWebPage = !!currentTab?.url && /^https?:/i.test(currentTab.url);
+
     const openItemInVault = (item: VaultItem) => {
         void send({ type: 'OPEN_VAULT', payload: { query: `?item=${encodeURIComponent(item.id)}` } });
         window.close();
     };
 
+    /**
+     * Opens the vault pre-searched for the current site, so the list is what
+     * the user was looking at in the popup rather than the whole vault.
+     */
     const openVault = () => {
-        void send({ type: 'OPEN_VAULT' });
+        const search = isWebPage ? normalizeDomain(currentTab!.url!) : '';
+        void send({ type: 'OPEN_VAULT', payload: { query: search ? `?search=${encodeURIComponent(search)}` : '' } });
         window.close();
     };
 
     const openOnboarding = () => {
-        chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
+        void chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
         window.close();
     };
 
@@ -138,34 +185,32 @@ export default function App() {
         if (!currentTab?.url) return;
         setCreating(true);
         const tabUrl = currentTab.url;
-        const tabHost = getHost(tabUrl);
-        const favicon = getFaviconUrl(tabUrl);
-        const generatedPw = password || await (async () => {
-            const { generateFromPreset, PRESETS } = await import('../utils/password-generator');
-            return generateFromPreset(PRESETS[0]);
-        })();
         const data: LoginItem = {
             url: normalizeStoredUrl(tabUrl),
             username: '',
             email: '',
-            password: generatedPw,
+            password: password || await presetPassword(),
             notes: '',
             totpSecret: '',
         };
         const metadata: VaultItemMetadata = {
             label: tabHost || 'New Login',
             domain: tabHost,
-            iconRef: favicon,
+            iconRef: getFaviconUrl(tabUrl),
             tags: [],
             favorite: false,
         };
-        const resp = await send({ type: 'CREATE_ITEM', payload: { itemType: 'login', data, metadata } });
+        const resp = await send<VaultItem>({ type: 'CREATE_ITEM', payload: { itemType: 'login', data, metadata } });
         setCreating(false);
-        if (resp.success) {
+        if (resp.success && resp.data) {
             setCreated(true);
             setTimeout(() => setCreated(false), 2000);
-            loadItemCount();
-            loadMatches();
+            void loadItemCount();
+            void loadMatches();
+            setAllItems(null);
+            // Straight into the editor: an entry with no username is not done.
+            setSelected(resp.data);
+            setEditing(true);
         }
     };
 
@@ -180,12 +225,31 @@ export default function App() {
                 username: login.username || login.email || '',
                 email: login.email || login.username || '',
                 password: login.password,
-                totp: login.totpSecret || '',
+                totp: login.totpSecret ? generateTotpCode(login.totpSecret) : '',
             },
         });
-        send({ type: 'UPDATE_ITEM_LAST_USED', payload: { itemId: item.id } });
+        void send({ type: 'UPDATE_ITEM_LAST_USED', payload: { itemId: item.id } });
         window.close();
     };
+
+    const handleSaveEdit = async (data: LoginItem, metadata: VaultItemMetadata): Promise<string | null> => {
+        if (!selected) return 'Nothing selected';
+        const resp = await send<VaultItem>({ type: 'UPDATE_ITEM', payload: { id: selected.id, data, metadata } });
+        if (!resp.success || !resp.data) return resp.error ?? 'Could not save';
+        setSelected(resp.data);
+        setEditing(false);
+        setAllItems(null);
+        void loadMatches();
+        return null;
+    };
+
+    const searchResults = useMemo(() => {
+        if (!query.trim() || !allItems) return [];
+        return allItems
+            .filter(item => itemMatchesQuery(item, query))
+            .sort((a, b) => lastUsedTime(b) - lastUsedTime(a))
+            .slice(0, 30);
+    }, [allItems, query]);
 
     if (initialized === null) {
         return (
@@ -230,6 +294,7 @@ export default function App() {
                             onChange={(e) => { setPin(e.target.value); setError(''); }}
                             onKeyDown={(e) => e.key === 'Enter' && handleUnlock()}
                             placeholder="••••"
+                            aria-label="PIN"
                             className="w-full px-4 py-2.5 pr-10 bg-vw-console-surface border border-vw-console-border rounded-lg text-white font-mono text-base focus:outline-none focus:border-vw-gold"
                             autoFocus
                         />
@@ -253,91 +318,113 @@ export default function App() {
         );
     }
 
+    if (selected) {
+        return (
+            <div className="vw-console-shell w-[360px] min-h-[480px] max-h-[580px] flex flex-col">
+                {editing && selected.itemType === 'login' ? (
+                    <PopupLoginEditor
+                        item={selected}
+                        generate={presetPassword}
+                        onCancel={() => setEditing(false)}
+                        onSave={handleSaveEdit}
+                    />
+                ) : (
+                    <PopupItemDetail
+                        item={selected}
+                        identity={identities.find(i => i.id === selected.identityId) ?? null}
+                        canAutofill={isWebPage}
+                        onBack={() => { setSelected(null); setEditing(false); }}
+                        onEdit={() => setEditing(true)}
+                        onAutofill={() => handleAutofill(selected)}
+                        onOpenInVault={() => openItemInVault(selected)}
+                    />
+                )}
+            </div>
+        );
+    }
+
     const score = measurePasswordStrength(password);
-    const domain = currentTab?.url ? normalizeDomain(currentTab.url) : '';
+    const domain = isWebPage ? normalizeDomain(currentTab!.url!) : '';
 
     return (
-        <div className="vw-console-shell w-[360px] min-h-[480px] flex flex-col">
+        <div className="vw-console-shell w-[360px] min-h-[480px] max-h-[580px] flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-vw-console-border">
                 <div className="flex items-center gap-2">
                     <Shield className="w-5 h-5 text-vw-gold" />
                     <span className="text-sm font-semibold text-white">VaultWares</span>
                 </div>
-                <button onClick={openVault} className="flex items-center gap-1.5 text-vw-console-text-secondary hover:text-white text-xs" title="Open full vault">
+                <button
+                    onClick={openVault}
+                    className="flex items-center gap-1.5 text-vw-console-text-secondary hover:text-white text-xs"
+                    title={domain ? `Open the vault filtered to ${domain}` : 'Open full vault'}
+                >
                     <ExternalLink className="w-4 h-4" /> Open Vault
                 </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {/* Page matches — identities + unassigned logins sorted by last used */}
-                {domain && (() => {
-                    const matchesWithIdentity = matches.filter(m => m.identityId);
-                    const unassignedMatches = matches.filter(m => !m.identityId);
-                    const identityIds = [...new Set(matchesWithIdentity.map(m => m.identityId))];
-                    const matchingIdentities = identities.filter(id => identityIds.includes(id.id));
+            <div className="px-4 pt-3">
+                <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-vw-console-text-secondary" />
+                    <input
+                        type="search"
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Search the vault…"
+                        aria-label="Search the vault"
+                        className="w-full pl-8 pr-3 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-xs text-white focus:outline-none focus:border-vw-gold"
+                    />
+                </div>
+            </div>
 
-                    const sortedIdentities = matchingIdentities.sort((a, b) => {
-                        const aLast = Math.max(...matchesWithIdentity.filter(m => m.identityId === a.id).map(m => m.lastUsedAt ? new Date(m.lastUsedAt).getTime() : 0));
-                        const bLast = Math.max(...matchesWithIdentity.filter(m => m.identityId === b.id).map(m => m.lastUsedAt ? new Date(m.lastUsedAt).getTime() : 0));
-                        return bLast - aLast;
-                    });
-                    const sortedUnassigned = unassignedMatches.sort((a, b) => {
-                        const aTime = a.lastUsedAt ? new Date(a.lastUsedAt).getTime() : 0;
-                        const bTime = b.lastUsedAt ? new Date(b.lastUsedAt).getTime() : 0;
-                        return bTime - aTime;
-                    });
-
-                    if (matches.length === 0) {
-                        return (
-                            <div>
-                                <div className="flex items-center gap-1.5 mb-2">
-                                    <Search className="w-3 h-3 text-vw-console-text-secondary" />
-                                    <span className="text-[11px] font-medium text-vw-console-text-secondary uppercase tracking-wider">
-                                        Matches for {domain}
-                                    </span>
-                                </div>
-                                <p className="text-xs text-vw-console-text-secondary/60 px-1">No items for this site.</p>
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+                {query.trim() ? (
+                    <div>
+                        <SectionLabel icon={<Search className="w-3 h-3" />} text={`Results for “${query.trim()}”`} />
+                        {searchLoading || allItems === null ? (
+                            <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 text-vw-gold animate-spin" /></div>
+                        ) : searchResults.length === 0 ? (
+                            <p className="text-xs text-vw-console-text-secondary/60 px-1">Nothing matches.</p>
+                        ) : (
+                            <div className="space-y-2">
+                                {searchResults.map(item => (
+                                    <PopupItemRow key={item.id} item={item} canAutofill={isWebPage} onAutofill={handleAutofill} onOpen={setSelected} />
+                                ))}
                             </div>
-                        );
-                    }
+                        )}
+                    </div>
+                ) : domain && (() => {
+                    // Most recently used first; never-used items keep the
+                    // background's host-match ranking (the sort is stable).
+                    const sorted = [...matches].sort((a, b) => lastUsedTime(b) - lastUsedTime(a));
+                    const identityNames = new Map(identities.map(i => [i.id, i]));
 
                     return (
                         <div>
-                            <div className="flex items-center gap-1.5 mb-2">
-                                <Search className="w-3 h-3 text-vw-console-text-secondary" />
-                                <span className="text-[11px] font-medium text-vw-console-text-secondary uppercase tracking-wider">
-                                    Matches for {domain}
-                                </span>
-                            </div>
-                            <div className="space-y-2">
-                                {sortedIdentities.map((identity) => {
-                                    const idMatches = matchesWithIdentity.filter(m => m.identityId === identity.id);
-                                    return (
-                                        <div key={identity.id} className="space-y-1">
-                                            <div className="flex items-center gap-2 px-1">
-                                                <div className="w-5 h-5 rounded bg-vw-console-surface flex items-center justify-center flex-shrink-0 overflow-hidden">
-                                                    {identity.facePhoto ? (
-                                                        <img src={identity.facePhoto} alt="" className="w-full h-full object-cover" />
-                                                    ) : (
-                                                        <User className="w-3 h-3 text-vw-gold" />
-                                                    )}
-                                                </div>
-                                                <span className="text-[10px] font-medium text-vw-console-text-secondary truncate">{identity.fullName}</span>
-                                            </div>
-                                            {idMatches.slice(0, 3).map((item) => (
-                                                <PopupItemRow key={item.id} item={item} onAutofill={handleAutofill} onOpen={openItemInVault} />
-                                            ))}
-                                        </div>
-                                    );
-                                })}
-                                {sortedUnassigned.length > 0 && sortedIdentities.length > 0 && (
-                                    <div className="border-t border-vw-console-border pt-1" />
-                                )}
-                                {sortedUnassigned.slice(0, 5).map((item) => (
-                                    <PopupItemRow key={item.id} item={item} onAutofill={handleAutofill} onOpen={openItemInVault} />
-                                ))}
-                            </div>
+                            <SectionLabel icon={<Search className="w-3 h-3" />} text={`Matches for ${domain}`} />
+                            {dataLoading && matches.length === 0 ? (
+                                <div className="flex justify-center py-6"><Loader2 className="w-5 h-5 text-vw-gold animate-spin" /></div>
+                            ) : sorted.length === 0 ? (
+                                <p className="text-xs text-vw-console-text-secondary/60 px-1">No items for this site.</p>
+                            ) : (
+                                <div className="space-y-2">
+                                    {sorted.slice(0, 8).map((item) => (
+                                        <PopupItemRow
+                                            key={item.id}
+                                            item={item}
+                                            identity={item.identityId ? identityNames.get(item.identityId) : undefined}
+                                            canAutofill={isWebPage}
+                                            onAutofill={handleAutofill}
+                                            onOpen={setSelected}
+                                        />
+                                    ))}
+                                    {sorted.length > 8 && (
+                                        <button onClick={openVault} className="w-full text-[11px] text-vw-console-text-secondary hover:text-white py-1">
+                                            {sorted.length - 8} more in the vault…
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                         </div>
                     );
                 })()}
@@ -348,7 +435,7 @@ export default function App() {
                         <div className="flex items-center justify-between mb-2">
                             <span className="text-[11px] font-medium text-vw-console-text-secondary uppercase tracking-wider">Quick Password</span>
                             <div className="flex items-center gap-1.5">
-                                <button onClick={generateNewPassword} className="text-vw-console-text-secondary hover:text-white">
+                                <button onClick={generateNewPassword} className="text-vw-console-text-secondary hover:text-white" title="Regenerate" aria-label="Regenerate">
                                     <RefreshCw className="w-3.5 h-3.5" />
                                 </button>
                                 <button onClick={() => setShowQuickGen(false)} className="text-vw-console-text-secondary hover:text-white">
@@ -361,9 +448,10 @@ export default function App() {
                                 type="text"
                                 readOnly
                                 value={password}
-                                className="flex-1 px-2.5 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-white font-mono text-xs"
+                                aria-label="Generated password"
+                                className="flex-1 min-w-0 px-2.5 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-white font-mono text-xs"
                             />
-                            <button onClick={copyPassword} className="px-2 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-vw-console-text-secondary hover:text-white">
+                            <button onClick={copyPassword} title="Copy" aria-label="Copy password" className="px-2 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-vw-console-text-secondary hover:text-white">
                                 {copied ? <Check className="w-3.5 h-3.5 text-vw-signal-online" /> : <Copy className="w-3.5 h-3.5" />}
                             </button>
                         </div>
@@ -374,7 +462,7 @@ export default function App() {
                     </div>
                 ) : (
                     <button
-                        onClick={() => { setShowQuickGen(true); generateNewPassword(); }}
+                        onClick={() => { setShowQuickGen(true); void generateNewPassword(); }}
                         className="w-full flex items-center justify-center gap-2 py-2.5 bg-vw-console-surface border border-vw-console-border rounded-lg text-xs text-vw-console-text-secondary hover:text-white hover:border-vw-gold/30 transition-colors"
                     >
                         <Wand2 className="w-3.5 h-3.5" /> Generate Quick Password
@@ -404,7 +492,7 @@ export default function App() {
                 </button>
                 <button
                     onClick={handleCreateItemFromTab}
-                    disabled={creating || !currentTab?.url}
+                    disabled={creating || !isWebPage}
                     className="flex items-center gap-1.5 text-xs text-vw-gold hover:underline disabled:opacity-50"
                 >
                     {created ? <><Check className="w-3 h-3" /> Saved!</> : creating ? <Loader2 className="w-3 h-3 animate-spin" /> : <><Plus className="w-3 h-3" /> New Item for this site</>}
@@ -414,37 +502,66 @@ export default function App() {
     );
 }
 
-function PopupItemRow({ item, onAutofill, onOpen }: {
-    item: VaultItem;
-    onAutofill: (item: VaultItem) => void;
-    onOpen: (item: VaultItem) => void;
-}) {
-    const [showTotp, setShowTotp] = useState(false);
-    const [totpCode, setTotpCode] = useState('');
-    const [totpSeconds, setTotpSeconds] = useState(30);
+function SectionLabel({ icon, text }: { icon: React.ReactNode; text: string }) {
+    return (
+        <div className="flex items-center gap-1.5 mb-2 text-vw-console-text-secondary min-w-0">
+            {icon}
+            <span className="text-[11px] font-medium uppercase tracking-wider truncate">{text}</span>
+        </div>
+    );
+}
+
+function useCopy(): [string, (value: string, field: string) => void] {
     const [copiedField, setCopiedField] = useState('');
-
-    useEffect(() => {
-        if (showTotp && item.itemType === 'totp') {
-            const data = item.data as TotpItem;
-            const update = () => {
-                setTotpCode(generateTotpCode(data.secret, { digits: data.digits, period: data.period, algorithm: data.algorithm }));
-                setTotpSeconds(getTotpRemainingSeconds(data.period));
-            };
-            update();
-            const interval = setInterval(update, 1000);
-            return () => clearInterval(interval);
-        }
-    }, [showTotp, item]);
-
-    const loginData = item.itemType === 'login' ? item.data as LoginItem : null;
-
-    const copyField = (e: React.MouseEvent, value: string, field: string) => {
-        e.stopPropagation();
-        navigator.clipboard.writeText(value);
+    const copy = (value: string, field: string) => {
+        void navigator.clipboard.writeText(value);
         setCopiedField(field);
         setTimeout(() => setCopiedField(''), 1200);
     };
+    return [copiedField, copy];
+}
+
+function useTotp(secret: string | undefined, opts?: Pick<TotpItem, 'digits' | 'period' | 'algorithm'>): { code: string; seconds: number } | null {
+    const [state, setState] = useState<{ code: string; seconds: number } | null>(null);
+    useEffect(() => {
+        if (!secret) { setState(null); return; }
+        const update = () => {
+            try {
+                setState({
+                    code: generateTotpCode(secret, { digits: opts?.digits, period: opts?.period, algorithm: opts?.algorithm }),
+                    seconds: getTotpRemainingSeconds(opts?.period),
+                });
+            } catch {
+                setState(null);
+            }
+        };
+        update();
+        const interval = setInterval(update, 1000);
+        return () => clearInterval(interval);
+    }, [secret, opts?.digits, opts?.period, opts?.algorithm]);
+    return state;
+}
+
+function PopupItemRow({ item, identity, canAutofill, onAutofill, onOpen }: {
+    item: VaultItem;
+    identity?: Identity;
+    canAutofill: boolean;
+    onAutofill: (item: VaultItem) => void;
+    onOpen: (item: VaultItem) => void;
+}) {
+    const [copiedField, copy] = useCopy();
+    const loginData = item.itemType === 'login' ? item.data as LoginItem : null;
+    const totpData = item.itemType === 'totp' ? item.data as TotpItem : null;
+    const totp = useTotp(totpData?.secret, totpData ?? undefined);
+
+    const stop = (e: React.MouseEvent, fn: () => void) => { e.stopPropagation(); fn(); };
+    // Visible on hover and on keyboard focus; hover-only actions could not be
+    // reached without a mouse.
+    const reveal = 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100';
+
+    const subtitle = (loginData && loginIdentifier(loginData))
+        || totpData?.issuer
+        || (item.itemType === 'card' ? `•••• ${(item.data as CardItem).cardNumber.slice(-4)}` : item.itemType);
 
     return (
         <div
@@ -452,8 +569,8 @@ function PopupItemRow({ item, onAutofill, onOpen }: {
             tabIndex={0}
             onClick={() => onOpen(item)}
             onKeyDown={(e) => { if (e.key === 'Enter') onOpen(item); }}
-            title="Open in vault"
-            className="flex items-center gap-2.5 p-2 bg-vw-console-surface rounded-lg hover:bg-vw-console-raised transition-colors cursor-pointer group"
+            title="Show details"
+            className="flex items-center gap-2.5 p-2 bg-vw-console-surface rounded-lg hover:bg-vw-console-raised focus:outline-none focus-visible:ring-1 focus-visible:ring-vw-gold transition-colors cursor-pointer group"
         >
             <div className="w-7 h-7 rounded bg-vw-console-elevated flex items-center justify-center flex-shrink-0">
                 {item.metadata.iconRef ? (
@@ -464,47 +581,227 @@ function PopupItemRow({ item, onAutofill, onOpen }: {
             </div>
             <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium text-white truncate">{item.metadata.label}</div>
-                <div className="text-[10px] text-vw-console-text-secondary truncate">
-                    {(loginData && loginIdentifier(loginData)) || (item.data as TotpItem).issuer || item.itemType}
+                <div className="text-[10px] text-vw-console-text-secondary truncate flex items-center gap-1">
+                    {identity && <User className="w-2.5 h-2.5 flex-shrink-0 text-vw-gold" />}
+                    <span className="truncate">{identity ? `${identity.fullName} · ` : ''}{subtitle}</span>
                 </div>
             </div>
-            {item.itemType === 'totp' && (
-                <button onClick={(e) => { e.stopPropagation(); setShowTotp(!showTotp); }} className="text-vw-signal-online hover:scale-110 transition-transform">
-                    <Clock className="w-3.5 h-3.5" />
+            {totp && (
+                <button
+                    onClick={(e) => stop(e, () => copy(totp.code, 'totp'))}
+                    className="font-mono text-[11px] text-vw-signal-online flex items-center gap-1"
+                    title="Copy code"
+                >
+                    {copiedField === 'totp' ? <Check className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                    {totp.code} <span className="text-vw-console-text-secondary text-[9px]">{totp.seconds}s</span>
                 </button>
             )}
             {loginData && loginIdentifier(loginData) && (
-                <button
-                    onClick={(e) => copyField(e, loginIdentifier(loginData), 'username')}
-                    className="text-vw-console-text-secondary hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="Copy username"
-                >
+                <button onClick={(e) => stop(e, () => copy(loginIdentifier(loginData), 'username'))} className={`text-vw-console-text-secondary hover:text-white transition-opacity ${reveal}`} title="Copy username" aria-label="Copy username">
                     {copiedField === 'username' ? <Check className="w-3.5 h-3.5 text-vw-signal-online" /> : <Copy className="w-3.5 h-3.5" />}
                 </button>
             )}
             {loginData?.password && (
-                <button
-                    onClick={(e) => copyField(e, loginData.password, 'password')}
-                    className="text-vw-console-text-secondary hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="Copy password"
-                >
+                <button onClick={(e) => stop(e, () => copy(loginData.password, 'password'))} className={`text-vw-console-text-secondary hover:text-white transition-opacity ${reveal}`} title="Copy password" aria-label="Copy password">
                     {copiedField === 'password' ? <Check className="w-3.5 h-3.5 text-vw-signal-online" /> : <Key className="w-3.5 h-3.5" />}
                 </button>
             )}
-            {loginData && (
-                <button
-                    onClick={(e) => { e.stopPropagation(); onAutofill(item); }}
-                    className="text-vw-gold hover:scale-110 transition-transform opacity-0 group-hover:opacity-100"
-                    title="Autofill"
-                >
+            {loginData && canAutofill && (
+                <button onClick={(e) => stop(e, () => onAutofill(item))} className={`text-vw-gold hover:scale-110 transition ${reveal}`} title="Autofill" aria-label="Autofill">
                     <ChevronRight className="w-3.5 h-3.5" />
                 </button>
             )}
-            {showTotp && (
-                <div className="absolute right-0 top-full mt-1 bg-vw-console-elevated border border-vw-console-border rounded-lg p-2 text-xs font-mono text-vw-signal-online z-10">
-                    {totpCode} <span className="text-vw-console-text-secondary text-[10px]">{totpSeconds}s</span>
-                </div>
-            )}
         </div>
+    );
+}
+
+function DetailRow({ icon, label, value, display, mono, copied, onCopy, trailing }: {
+    icon: React.ReactNode;
+    label: string;
+    value: string;
+    display?: string;
+    mono?: boolean;
+    copied: boolean;
+    onCopy: () => void;
+    trailing?: React.ReactNode;
+}) {
+    if (!value) return null;
+    return (
+        <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-vw-console-border last:border-b-0">
+            <span className="text-vw-console-text-secondary flex-shrink-0">{icon}</span>
+            <div className="flex-1 min-w-0">
+                <div className="text-[10px] uppercase tracking-wider text-vw-console-text-secondary">{label}</div>
+                <div className={`text-xs text-white break-all ${mono ? 'font-mono' : ''}`}>{display ?? value}</div>
+            </div>
+            {trailing}
+            <button onClick={onCopy} className="text-vw-console-text-secondary hover:text-white p-1" title={`Copy ${label.toLowerCase()}`} aria-label={`Copy ${label.toLowerCase()}`}>
+                {copied ? <Check className="w-3.5 h-3.5 text-vw-signal-online" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+        </div>
+    );
+}
+
+function PopupItemDetail({ item, identity, canAutofill, onBack, onEdit, onAutofill, onOpenInVault }: {
+    item: VaultItem;
+    identity: Identity | null;
+    canAutofill: boolean;
+    onBack: () => void;
+    onEdit: () => void;
+    onAutofill: () => void;
+    onOpenInVault: () => void;
+}) {
+    const [copiedField, copy] = useCopy();
+    const [showPassword, setShowPassword] = useState(false);
+    const login = item.itemType === 'login' ? item.data as LoginItem : null;
+    const totpItem = item.itemType === 'totp' ? item.data as TotpItem : null;
+    const totp = useTotp(login?.totpSecret || totpItem?.secret, totpItem ?? undefined);
+
+    return (
+        <>
+            <div className="flex items-center gap-2 px-3 py-3 border-b border-vw-console-border">
+                <button onClick={onBack} className="text-vw-console-text-secondary hover:text-white p-1" title="Back" aria-label="Back">
+                    <ChevronLeft className="w-4 h-4" />
+                </button>
+                <div className="w-7 h-7 rounded bg-vw-console-elevated flex items-center justify-center flex-shrink-0">
+                    {item.metadata.iconRef ? <img src={item.metadata.iconRef} alt="" className="w-4 h-4 rounded" /> : <Key className="w-3.5 h-3.5 text-vw-gold" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-white truncate">{item.metadata.label}</div>
+                    <div className="text-[10px] text-vw-console-text-secondary truncate">
+                        {identity ? `${identity.fullName} · ` : ''}{item.lastUsedAt ? `Last used ${new Date(item.lastUsedAt).toLocaleDateString()}` : 'Never used'}
+                    </div>
+                </div>
+                {login && (
+                    <button onClick={onEdit} className="text-vw-console-text-secondary hover:text-white p-1" title="Edit" aria-label="Edit">
+                        <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                )}
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+                <div className="vw-card !rounded-xl overflow-hidden">
+                    {login && (
+                        <>
+                            <DetailRow icon={<Mail className="w-3.5 h-3.5" />} label="Email" value={login.email ?? ''} copied={copiedField === 'email'} onCopy={() => copy(login.email ?? '', 'email')} />
+                            {login.username && login.username !== login.email && (
+                                <DetailRow icon={<User className="w-3.5 h-3.5" />} label="Username" value={login.username} copied={copiedField === 'username'} onCopy={() => copy(login.username, 'username')} />
+                            )}
+                            <DetailRow
+                                icon={<Key className="w-3.5 h-3.5" />}
+                                label="Password"
+                                value={login.password}
+                                display={showPassword ? login.password : '•'.repeat(Math.min(login.password.length, 16))}
+                                mono
+                                copied={copiedField === 'password'}
+                                onCopy={() => copy(login.password, 'password')}
+                                trailing={(
+                                    <button onClick={() => setShowPassword(!showPassword)} className="text-vw-console-text-secondary hover:text-white p-1" title={showPassword ? 'Hide' : 'Show'} aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                                        {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                    </button>
+                                )}
+                            />
+                        </>
+                    )}
+                    {totp && (
+                        <DetailRow
+                            icon={<Clock className="w-3.5 h-3.5" />}
+                            label={`2FA code · ${totp.seconds}s`}
+                            value={totp.code}
+                            mono
+                            copied={copiedField === 'totp'}
+                            onCopy={() => copy(totp.code, 'totp')}
+                        />
+                    )}
+                    {login && <DetailRow icon={<Globe className="w-3.5 h-3.5" />} label="Website" value={login.url} copied={copiedField === 'url'} onCopy={() => copy(login.url, 'url')} />}
+                    {login?.notes && <DetailRow icon={<StickyNote className="w-3.5 h-3.5" />} label="Notes" value={login.notes} copied={copiedField === 'notes'} onCopy={() => copy(login.notes ?? '', 'notes')} />}
+                    {!login && !totp && (
+                        <p className="p-3 text-xs text-vw-console-text-secondary">This item type is edited in the vault.</p>
+                    )}
+                </div>
+            </div>
+
+            <div className="px-4 py-2.5 border-t border-vw-console-border flex items-center justify-between gap-2">
+                <button onClick={onOpenInVault} className="flex items-center gap-1.5 text-xs text-vw-console-text-secondary hover:text-white">
+                    <ExternalLink className="w-3.5 h-3.5" /> Open in vault
+                </button>
+                {login && canAutofill && (
+                    <button onClick={onAutofill} className="flex items-center gap-1.5 px-3 py-1.5 bg-vw-gold text-vw-console-bg rounded-lg text-xs font-medium hover:bg-[#C69431]">
+                        Autofill <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                )}
+            </div>
+        </>
+    );
+}
+
+function PopupLoginEditor({ item, generate, onCancel, onSave }: {
+    item: VaultItem;
+    generate: () => Promise<string>;
+    onCancel: () => void;
+    onSave: (data: LoginItem, metadata: VaultItemMetadata) => Promise<string | null>;
+}) {
+    const original = item.data as LoginItem;
+    const [label, setLabel] = useState(item.metadata.label);
+    const [data, setData] = useState<LoginItem>({ ...original, email: original.email ?? '', notes: original.notes ?? '', totpSecret: original.totpSecret ?? '' });
+    const [showPassword, setShowPassword] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState('');
+
+    const set = (patch: Partial<LoginItem>) => setData(prev => ({ ...prev, ...patch }));
+
+    const save = async () => {
+        setSaving(true);
+        const url = normalizeStoredUrl(data.url);
+        const err = await onSave(
+            { ...data, url },
+            { ...item.metadata, label: label.trim() || getHost(url) || item.metadata.label, domain: getHost(url) || item.metadata.domain },
+        );
+        setSaving(false);
+        if (err) setError(err);
+    };
+
+    const input = 'w-full px-2.5 py-1.5 bg-vw-console-surface border border-vw-console-border rounded text-white text-xs focus:outline-none focus:border-vw-gold';
+    const field = (labelText: string, el: React.ReactNode) => (
+        <label className="block">
+            <span className="block text-[10px] uppercase tracking-wider text-vw-console-text-secondary mb-1">{labelText}</span>
+            {el}
+        </label>
+    );
+
+    return (
+        <>
+            <div className="flex items-center gap-2 px-3 py-3 border-b border-vw-console-border">
+                <button onClick={onCancel} className="text-vw-console-text-secondary hover:text-white p-1" title="Cancel" aria-label="Cancel">
+                    <X className="w-4 h-4" />
+                </button>
+                <span className="flex-1 text-sm font-semibold text-white">Edit login</span>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
+                {field('Title', <input className={input} value={label} onChange={e => setLabel(e.target.value)} />)}
+                {field('Email', <input className={input} type="email" value={data.email} onChange={e => set({ email: e.target.value })} autoFocus={!original.email && !original.username} />)}
+                {field('Username', <input className={input} value={data.username} onChange={e => set({ username: e.target.value })} />)}
+                {field('Password', (
+                    <div className="flex items-center gap-1.5">
+                        <input className={`${input} font-mono flex-1 min-w-0`} type={showPassword ? 'text' : 'password'} value={data.password} onChange={e => set({ password: e.target.value })} />
+                        <button type="button" onClick={() => setShowPassword(!showPassword)} className="p-1.5 text-vw-console-text-secondary hover:text-white" title={showPassword ? 'Hide' : 'Show'} aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                            {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                        <button type="button" onClick={async () => { set({ password: await generate() }); setShowPassword(true); }} className="p-1.5 text-vw-console-text-secondary hover:text-white" title="Generate" aria-label="Generate password">
+                            <Wand2 className="w-3.5 h-3.5" />
+                        </button>
+                    </div>
+                ))}
+                {field('Website', <input className={input} value={data.url} onChange={e => set({ url: e.target.value })} />)}
+                {field('2FA secret', <input className={`${input} font-mono`} value={data.totpSecret} onChange={e => set({ totpSecret: e.target.value.replace(/\s+/g, '') })} placeholder="Base32 secret" />)}
+                {field('Notes', <textarea className={`${input} min-h-[56px] resize-y`} value={data.notes} onChange={e => set({ notes: e.target.value })} />)}
+                {error && <p className="text-xs text-vw-signal-alert">{error}</p>}
+            </div>
+            <div className="px-4 py-2.5 border-t border-vw-console-border flex items-center justify-end gap-2">
+                <button onClick={onCancel} className="px-3 py-1.5 text-xs text-vw-console-text-secondary hover:text-white">Cancel</button>
+                <button onClick={save} disabled={saving} className="flex items-center gap-1.5 px-3 py-1.5 bg-vw-gold text-vw-console-bg rounded-lg text-xs font-medium hover:bg-[#C69431] disabled:opacity-50">
+                    {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />} Save
+                </button>
+            </div>
+        </>
     );
 }
