@@ -125,6 +125,26 @@ const STRINGS = {
         en: 'New',
         qc: 'Nouveau',
     },
+    menuNoFilterMatches: {
+        en: 'Nothing in your vault matches what you typed',
+        qc: 'Rien dans votre coffre ne correspond à votre saisie',
+    },
+    menuSuggestEmailsGroup: {
+        en: 'Your emails',
+        qc: 'Vos courriels',
+    },
+    menuSuggestUsernamesGroup: {
+        en: 'Your usernames',
+        qc: "Vos noms d'utilisateur",
+    },
+    menuSuggestUsedCount: {
+        en: 'Used for {count} logins',
+        qc: 'Utilisé pour {count} identifiants',
+    },
+    menuSuggestUsedOnce: {
+        en: 'Used for 1 login',
+        qc: 'Utilisé pour 1 identifiant',
+    },
 
     /* --------------------------------------------------- save-login prompt */
     savePromptTitle: {

@@ -16,6 +16,8 @@ export interface MenuEntry {
     /** Shown as a chip; used for passkey entries. */
     badge?: string;
     group?: string;
+    /** Kept visible while the user types into the field (e.g. "generate password"). */
+    pinned?: boolean;
     onChoose: () => void;
 }
 
@@ -28,6 +30,25 @@ export interface MenuOptions {
     footerLabel?: string;
     onFooter?: () => void;
     anchor: HTMLElement;
+    /**
+     * Narrow the entries to those matching what the user types into the
+     * anchor. Off for password fields: the value typed there is not a search.
+     */
+    filterOnInput?: boolean;
+    /** Shown instead of `emptyMessage` when typing filtered everything out. */
+    noFilterMatchesMessage?: string;
+}
+
+/** Case- and accent-insensitive "contains", so `jose` finds `José`. */
+function fold(value: string): string {
+    return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+export function entryMatches(entry: Pick<MenuEntry, 'label' | 'sublabel' | 'pinned'>, query: string): boolean {
+    if (entry.pinned) return true;
+    const q = fold(query.trim());
+    if (!q) return true;
+    return fold(entry.label).includes(q) || fold(entry.sublabel).includes(q);
 }
 
 const HOST_ID = 'vw-inline-menu';
@@ -84,6 +105,9 @@ function styleSheet(): string {
         }
         .entry[data-active="true"] .icon { background: ${TOKENS.consoleElevated}; }
         .text { flex: 1; min-width: 0; }
+        /* Spans, so they need display:block to stack; without it the
+           subtitle ran into the title on one line. */
+        .label, .sublabel { display: block; }
         .label {
             font-size: 13px; font-weight: 500; color: ${TOKENS.consoleTextStrong};
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -223,22 +247,34 @@ export function showMenu(options: MenuOptions): void {
     }
 
     const actionable: HTMLElement[] = [];
+    // Entries live in their own container so typing can re-render them
+    // without rebuilding the header, notice and footer.
+    const list = document.createElement('div');
+    menu.appendChild(list);
 
-    if (options.entries.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'empty';
-        empty.textContent = options.emptyMessage ?? t('menuNoMatches');
-        menu.appendChild(empty);
-    } else {
+    const renderEntries = (query: string) => {
+        list.replaceChildren();
+        actionable.length = 0;
+
+        const visible = options.entries.filter(entry => entryMatches(entry, query));
+        if (visible.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'empty';
+            empty.textContent = options.entries.length > 0 && query.trim()
+                ? (options.noFilterMatchesMessage ?? options.emptyMessage ?? t('menuNoMatches'))
+                : (options.emptyMessage ?? t('menuNoMatches'));
+            list.appendChild(empty);
+        }
+
         let lastGroup: string | undefined;
-        for (const entry of options.entries) {
+        for (const entry of visible) {
             if (entry.group && entry.group !== lastGroup) {
                 const group = document.createElement('div');
                 group.className = 'group';
                 group.textContent = entry.group;
-                menu.appendChild(group);
-                lastGroup = entry.group;
+                list.appendChild(group);
             }
+            lastGroup = entry.group;
 
             const button = document.createElement('button');
             button.className = 'entry';
@@ -271,11 +307,13 @@ export function showMenu(options: MenuOptions): void {
                 closeMenu();
                 entry.onChoose();
             });
-            menu.appendChild(button);
+            list.appendChild(button);
             actionable.push(button);
         }
-    }
+        if (footerButton) actionable.push(footerButton);
+    };
 
+    let footerButton: HTMLButtonElement | null = null;
     if (options.footerLabel && options.onFooter) {
         const footer = document.createElement('button');
         footer.className = 'footer';
@@ -289,9 +327,13 @@ export function showMenu(options: MenuOptions): void {
             closeMenu();
             options.onFooter?.();
         });
-        menu.appendChild(footer);
-        actionable.push(footer);
+        footerButton = footer;
     }
+
+    // Opening with the whole list: a value already in the field (prefilled by
+    // the site or the browser) is not something the user typed as a search.
+    renderEntries('');
+    if (footerButton) menu.appendChild(footerButton);
 
     document.documentElement.appendChild(host);
     position(menu, options.anchor);
@@ -384,7 +426,15 @@ export function showMenu(options: MenuOptions): void {
 
     const reposition = () => position(menu, options.anchor);
 
+    const anchorInput = options.anchor as HTMLInputElement;
+    const onInput = () => {
+        if (!options.filterOnInput) return;
+        renderEntries(anchorInput.value ?? '');
+        setActive(-1);
+    };
+
     options.anchor.addEventListener('keydown', onKeyDown, true);
+    options.anchor.addEventListener('input', onInput);
     document.addEventListener('pointerdown', onDocumentPointerDown, true);
     window.addEventListener('scroll', reposition, true);
     window.addEventListener('resize', reposition);
@@ -394,6 +444,7 @@ export function showMenu(options: MenuOptions): void {
         anchor: options.anchor,
         dispose: () => {
             options.anchor.removeEventListener('keydown', onKeyDown, true);
+            options.anchor.removeEventListener('input', onInput);
             document.removeEventListener('pointerdown', onDocumentPointerDown, true);
             window.removeEventListener('scroll', reposition, true);
             window.removeEventListener('resize', reposition);
