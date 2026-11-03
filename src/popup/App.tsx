@@ -19,6 +19,15 @@ function send<T>(msg: { type: string; payload?: any }): Promise<Response<T>> {
     return chrome.runtime.sendMessage(msg);
 }
 
+function safeTotp(secret: string | undefined): string {
+    if (!secret) return '';
+    try {
+        return generateTotpCode(secret);
+    } catch {
+        return '';
+    }
+}
+
 function lastUsedTime(item: VaultItem): number {
     return item.lastUsedAt ? new Date(item.lastUsedAt).getTime() : 0;
 }
@@ -61,6 +70,9 @@ export default function App() {
     // Item detail / edit, without leaving the popup.
     const [selected, setSelected] = useState<VaultItem | null>(null);
     const [editing, setEditing] = useState(false);
+    // A login being created from the popup. Nothing is stored until Save, so
+    // cancelling leaves no half-finished entry behind to sync.
+    const [isDraft, setIsDraft] = useState(false);
 
     useEffect(() => {
         // Both answers are local storage reads; asking in parallel halves the
@@ -200,18 +212,22 @@ export default function App() {
             tags: [],
             favorite: false,
         };
-        const resp = await send<VaultItem>({ type: 'CREATE_ITEM', payload: { itemType: 'login', data, metadata } });
         setCreating(false);
-        if (resp.success && resp.data) {
-            setCreated(true);
-            setTimeout(() => setCreated(false), 2000);
-            void loadItemCount();
-            void loadMatches();
-            setAllItems(null);
-            // Straight into the editor: an entry with no username is not done.
-            setSelected(resp.data);
-            setEditing(true);
-        }
+        const now = new Date().toISOString();
+        setSelected({
+            id: '',
+            itemType: 'login',
+            data,
+            metadata,
+            identityId: null,
+            createdAt: now,
+            updatedAt: now,
+            authorDeviceId: '',
+            deletedAt: null,
+            lastUsedAt: null,
+        });
+        setIsDraft(true);
+        setEditing(true);
     };
 
     const handleAutofill = async (item: VaultItem) => {
@@ -225,7 +241,8 @@ export default function App() {
                 username: login.username || login.email || '',
                 email: login.email || login.username || '',
                 password: login.password,
-                totp: login.totpSecret ? generateTotpCode(login.totpSecret) : '',
+                // A malformed optional secret must not stop the password filling.
+                totp: safeTotp(login.totpSecret),
             },
         });
         void send({ type: 'UPDATE_ITEM_LAST_USED', payload: { itemId: item.id } });
@@ -234,13 +251,29 @@ export default function App() {
 
     const handleSaveEdit = async (data: LoginItem, metadata: VaultItemMetadata): Promise<string | null> => {
         if (!selected) return 'Nothing selected';
-        const resp = await send<VaultItem>({ type: 'UPDATE_ITEM', payload: { id: selected.id, data, metadata } });
+        const resp = isDraft
+            ? await send<VaultItem>({ type: 'CREATE_ITEM', payload: { itemType: 'login', data, metadata } })
+            : await send<VaultItem>({ type: 'UPDATE_ITEM', payload: { id: selected.id, data, metadata } });
         if (!resp.success || !resp.data) return resp.error ?? 'Could not save';
+        if (isDraft) {
+            setIsDraft(false);
+            setCreated(true);
+            setTimeout(() => setCreated(false), 2000);
+            void loadItemCount();
+        }
         setSelected(resp.data);
         setEditing(false);
         setAllItems(null);
         void loadMatches();
         return null;
+    };
+
+    const handleCancelEdit = () => {
+        setEditing(false);
+        if (isDraft) {
+            setIsDraft(false);
+            setSelected(null);
+        }
     };
 
     const searchResults = useMemo(() => {
@@ -325,7 +358,8 @@ export default function App() {
                     <PopupLoginEditor
                         item={selected}
                         generate={presetPassword}
-                        onCancel={() => setEditing(false)}
+                        title={isDraft ? 'New login' : 'Edit login'}
+                        onCancel={handleCancelEdit}
                         onSave={handleSaveEdit}
                     />
                 ) : (
@@ -502,14 +536,14 @@ export default function App() {
     );
 }
 
-function SectionLabel({ icon, text }: { icon: React.ReactNode; text: string }) {
+const SectionLabel = ({ icon, text }: { icon: React.ReactNode; text: string }) => {
     return (
         <div className="flex items-center gap-1.5 mb-2 text-vw-console-text-secondary min-w-0">
             {icon}
             <span className="text-[11px] font-medium uppercase tracking-wider truncate">{text}</span>
         </div>
     );
-}
+};
 
 function useCopy(): [string, (value: string, field: string) => void] {
     const [copiedField, setCopiedField] = useState('');
@@ -615,7 +649,7 @@ function PopupItemRow({ item, identity, canAutofill, onAutofill, onOpen }: {
     );
 }
 
-function DetailRow({ icon, label, value, display, mono, copied, onCopy, trailing }: {
+const DetailRow = ({ icon, label, value, display, mono, copied, onCopy, trailing }: {
     icon: React.ReactNode;
     label: string;
     value: string;
@@ -624,7 +658,7 @@ function DetailRow({ icon, label, value, display, mono, copied, onCopy, trailing
     copied: boolean;
     onCopy: () => void;
     trailing?: React.ReactNode;
-}) {
+}) => {
     if (!value) return null;
     return (
         <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-vw-console-border last:border-b-0">
@@ -639,9 +673,9 @@ function DetailRow({ icon, label, value, display, mono, copied, onCopy, trailing
             </button>
         </div>
     );
-}
+};
 
-function PopupItemDetail({ item, identity, canAutofill, onBack, onEdit, onAutofill, onOpenInVault }: {
+const PopupItemDetail = ({ item, identity, canAutofill, onBack, onEdit, onAutofill, onOpenInVault }: {
     item: VaultItem;
     identity: Identity | null;
     canAutofill: boolean;
@@ -649,7 +683,7 @@ function PopupItemDetail({ item, identity, canAutofill, onBack, onEdit, onAutofi
     onEdit: () => void;
     onAutofill: () => void;
     onOpenInVault: () => void;
-}) {
+}) => {
     const [copiedField, copy] = useCopy();
     const [showPassword, setShowPassword] = useState(false);
     const login = item.itemType === 'login' ? item.data as LoginItem : null;
@@ -732,17 +766,28 @@ function PopupItemDetail({ item, identity, canAutofill, onBack, onEdit, onAutofi
             </div>
         </>
     );
-}
+};
 
-function PopupLoginEditor({ item, generate, onCancel, onSave }: {
+const PopupLoginEditor = ({ item, generate, title, onCancel, onSave }: {
     item: VaultItem;
     generate: () => Promise<string>;
+    title: string;
     onCancel: () => void;
     onSave: (data: LoginItem, metadata: VaultItemMetadata) => Promise<string | null>;
-}) {
+}) => {
     const original = item.data as LoginItem;
     const [label, setLabel] = useState(item.metadata.label);
-    const [data, setData] = useState<LoginItem>({ ...original, email: original.email ?? '', notes: original.notes ?? '', totpSecret: original.totpSecret ?? '' });
+    // Every field defined, so no input flips from uncontrolled to controlled
+    // on records written before a field existed.
+    const [data, setData] = useState<LoginItem>({
+        ...original,
+        url: original.url ?? '',
+        username: original.username ?? '',
+        password: original.password ?? '',
+        email: original.email ?? '',
+        notes: original.notes ?? '',
+        totpSecret: original.totpSecret ?? '',
+    });
     const [showPassword, setShowPassword] = useState(false);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
@@ -774,7 +819,7 @@ function PopupLoginEditor({ item, generate, onCancel, onSave }: {
                 <button onClick={onCancel} className="text-vw-console-text-secondary hover:text-white p-1" title="Cancel" aria-label="Cancel">
                     <X className="w-4 h-4" />
                 </button>
-                <span className="flex-1 text-sm font-semibold text-white">Edit login</span>
+                <span className="flex-1 text-sm font-semibold text-white">{title}</span>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-3">
                 {field('Title', <input className={input} value={label} onChange={e => setLabel(e.target.value)} />)}
@@ -804,4 +849,4 @@ function PopupLoginEditor({ item, generate, onCancel, onSave }: {
             </div>
         </>
     );
-}
+};

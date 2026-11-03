@@ -40,8 +40,8 @@ export interface MenuOptions {
 }
 
 /** Case- and accent-insensitive "contains", so `jose` finds `José`. */
-function fold(value: string): string {
-    return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function fold(value: string | null | undefined): string {
+    return (value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
 export function entryMatches(entry: Pick<MenuEntry, 'label' | 'sublabel' | 'pinned'>, query: string): boolean {

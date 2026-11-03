@@ -206,7 +206,7 @@ export async function getCachedMasterKey(): Promise<Uint8Array | null> {
         return cachedMasterKey;
     }
     try {
-        const result = await sessionStore.get([SESSION_KEY, LOCK_AT_KEY]) as Record<string, any>;
+        const result = await sessionStore.get([SESSION_KEY, LOCK_AT_KEY]);
         const stored = result[SESSION_KEY] as string | undefined;
         const storedLockAt = result[LOCK_AT_KEY] as number | undefined;
         if (stored) {

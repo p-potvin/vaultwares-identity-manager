@@ -18,7 +18,7 @@ import { localStore } from '../platform/store';
 // chunk loader, and an MV3 service worker has no `document`: on Chrome every
 // handler that used one failed with "document is not defined" (page matches)
 // or never answered (save prompt).
-import { matchStrength, MATCH_NONE, MATCH_RELATED, normalizeDomain, getFullDomain } from '../utils/domain';
+import { matchStrength, MATCH_NONE, MATCH_EXACT, normalizeDomain, getFullDomain } from '../utils/domain';
 import type { VaultItem, EncryptedVaultItem, ItemType, VaultItemData, VaultItemMetadata, VaultSettings, RecoveryKit, Identity, GeneratedIdentityData, PasskeyItem, LoginItem } from '../types';
 
 export type MessageType =
@@ -113,7 +113,10 @@ function openItem(enc: EncryptedVaultItem, kemSecretKey: Uint8Array, sigPublicKe
     const hit = openedItems.get(enc.id);
     if (hit && hit.signature === enc.envelope.signature) {
         // deletedAt lives outside the signed envelope.
-        return hit.item.deletedAt === enc.deletedAt ? hit.item : { ...hit.item, deletedAt: enc.deletedAt };
+        if (hit.item.deletedAt === enc.deletedAt) return hit.item;
+        const item = { ...hit.item, deletedAt: enc.deletedAt };
+        openedItems.set(enc.id, { signature: enc.envelope.signature, item });
+        return item;
     }
     const item = openEnvelope(enc, kemSecretKey, sigPublicKey);
     openedItems.set(enc.id, { signature: enc.envelope.signature, item });
@@ -595,7 +598,10 @@ async function handleGetIdentifierSuggestions(): Promise<MessageResponse> {
 
         const ranked = [...tally.values()].sort((a, b) =>
             b.uses - a.uses || (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? ''));
-        return { success: true, data: ranked.slice(0, 12) };
+        // Capped per kind, so frequent usernames cannot crowd every email out
+        // of the list an email field filters down to.
+        const top = (kind: IdentifierSuggestion['kind']) => ranked.filter(s => s.kind === kind).slice(0, 8);
+        return { success: true, data: [...top('email'), ...top('username')] };
     } catch (e) {
         return { success: false, error: (e as Error).message };
     }
@@ -1021,18 +1027,27 @@ async function handleFindLoginForSave(payload: {
 
         for (const enc of await getEncryptedItems()) {
             if (enc.deletedAt || enc.envelope.itemType !== 'login') continue;
-            // Matched like the suggestion menu matches, not by string equality
-            // with the registrable domain: items store the full host
-            // (`accounts.google.com`), which never equalled `google.com`, so a
-            // known login was offered as a new one and saved twice.
-            // Sibling subdomains (RELATED) are excluded: updating a login for
-            // dev.example.com from mail.example.com would overwrite the wrong one.
-            if (matchStrength(enc.envelope.metadata.domain || '', payload.url) <= MATCH_RELATED) continue;
+            // Same registrable domain first (cheap, no decryption), then an
+            // exact host match on the stored domain or URL. Exact only: this
+            // answer decides which item an "update password" overwrites, and a
+            // form on attacker.example.com must not be able to replace the
+            // password saved for example.com. Items store the full host, so the
+            // old equality with the registrable domain (`google.com` vs
+            // `accounts.google.com`) never matched and offered duplicates.
+            if (matchStrength(enc.envelope.metadata.domain || '', payload.url) === MATCH_NONE) continue;
 
             const item = openItem(enc, kemSecretKey, sigKp.publicKey);
             const login = item.data as LoginItem;
-            const identifiers = [login.username, login.email].map(v => (v ?? '').trim().toLowerCase());
-            if (!identifiers.includes(username)) continue;
+            const exact = matchStrength(enc.envelope.metadata.domain || '', payload.url) === MATCH_EXACT
+                || (!!login.url && matchStrength(login.url, payload.url) === MATCH_EXACT);
+            if (!exact) continue;
+
+            // An empty submitted identifier matches nothing: a password-only
+            // form must not be treated as an update of a login with no email.
+            const identifiers = [login.username, login.email]
+                .map(v => (v ?? '').trim().toLowerCase())
+                .filter(Boolean);
+            if (!username || !identifiers.includes(username)) continue;
 
             return {
                 success: true,

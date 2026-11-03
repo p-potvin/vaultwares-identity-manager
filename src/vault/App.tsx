@@ -717,7 +717,7 @@ export default function App() {
  * Deletion is permanent — there is no trash — and it syncs, so a single
  * misclick next to Save used to erase an item everywhere.
  */
-function ConfirmDeleteButton({ onConfirm, className }: { onConfirm: () => void; className: string }) {
+const ConfirmDeleteButton = ({ onConfirm, className }: { onConfirm: () => void; className: string }) => {
     const [armed, setArmed] = useState(false);
     useEffect(() => {
         if (!armed) return;
@@ -729,7 +729,7 @@ function ConfirmDeleteButton({ onConfirm, className }: { onConfirm: () => void; 
             <Trash2 className="w-4 h-4" /> {armed ? 'Click again to delete permanently' : 'Delete'}
         </button>
     );
-}
+};
 
 function ItemCard({ item, onClick }: { item: VaultItem; onClick: () => void }) {
     const config = ITEM_TYPE_CONFIG[item.itemType];
