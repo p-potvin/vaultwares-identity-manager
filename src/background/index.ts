@@ -1,4 +1,4 @@
-import { initKeychain, wrapAndStoreMasterKey, unwrapMasterKey, setCachedMasterKey, getCachedMasterKey, setDeviceId, getKeychain, isInitialized, getKemPublicKey, getSigKeyPair, getKemSecretKey, clearKeychain } from '../crypto/keychain';
+import { initKeychain, wrapAndStoreMasterKey, unwrapMasterKey, setCachedMasterKey, getCachedMasterKey, setLockDeadline, onMasterKeyCleared, setDeviceId, getKeychain, isInitialized, getKemPublicKey, getSigKeyPair, getKemSecretKey, clearKeychain } from '../crypto/keychain';
 import { createEnvelope, openEnvelope, createVaultItem, updateVaultItemTimestamp } from '../crypto/envelope';
 import { generateRecoveryKit, downloadRecoveryKit } from '../crypto/recovery';
 import { getEncryptedItems, saveEncryptedItem, deleteEncryptedItem, replaceAllEncryptedItems, getSettings, saveSettings, getSyncCursor, setSyncCursor } from '../utils/storage';
@@ -14,6 +14,11 @@ import { openAccountKeyBlob, openPortableKeychain, fromPortableKeychain } from '
 import { prepareCeremony, performCreate, performGet, WebAuthnError, type PasskeyRecord, type VaultAccess } from '../webauthn/service';
 import type { SerializedCreationOptions, SerializedRequestOptions } from '../webauthn/types';
 import { localStore } from '../platform/store';
+// Static on purpose. A dynamic import() here compiles to webpack's <script>-tag
+// chunk loader, and an MV3 service worker has no `document`: on Chrome every
+// handler that used one failed with "document is not defined" (page matches)
+// or never answered (save prompt).
+import { matchStrength, MATCH_NONE, MATCH_EXACT, normalizeDomain, getFullDomain } from '../utils/domain';
 import type { VaultItem, EncryptedVaultItem, ItemType, VaultItemData, VaultItemMetadata, VaultSettings, RecoveryKit, Identity, GeneratedIdentityData, PasskeyItem, LoginItem } from '../types';
 
 export type MessageType =
@@ -23,6 +28,8 @@ export type MessageType =
     | 'LOCK'
     | 'GET_UNLOCKED'
     | 'GET_ITEMS'
+    | 'GET_ITEM_SUMMARY'
+    | 'GET_IDENTIFIER_SUGGESTIONS'
     | 'CREATE_ITEM'
     | 'UPDATE_ITEM'
     | 'DELETE_ITEM'
@@ -83,6 +90,39 @@ export interface MessageResponse {
 
 let lockTimer: ReturnType<typeof setTimeout> | null = null;
 
+/* ------------------------------------------------- decrypted-item cache */
+
+/**
+ * Opened items, keyed by id and validated against the envelope signature.
+ *
+ * Opening an envelope is an ML-DSA-65 verify plus an ML-KEM-768 decapsulation,
+ * ~4ms per item in the service worker. Every page load asks for matches and
+ * every popup open asked for the whole list, so a 1,000-item vault re-did ~4s
+ * of PQC work each time. A re-encrypted item always carries a fresh signature,
+ * so a signature mismatch is a reliable "changed since cached" signal, including
+ * for items replaced by sync.
+ *
+ * Holds plaintext only while unlocked — the same exposure as the master key
+ * already cached in this worker — and is dropped on lock.
+ */
+const openedItems = new Map<string, { signature: string; item: VaultItem }>();
+
+onMasterKeyCleared(() => openedItems.clear());
+
+function openItem(enc: EncryptedVaultItem, kemSecretKey: Uint8Array, sigPublicKey: Uint8Array): VaultItem {
+    const hit = openedItems.get(enc.id);
+    if (hit && hit.signature === enc.envelope.signature) {
+        // deletedAt lives outside the signed envelope.
+        if (hit.item.deletedAt === enc.deletedAt) return hit.item;
+        const item = { ...hit.item, deletedAt: enc.deletedAt };
+        openedItems.set(enc.id, { signature: enc.envelope.signature, item });
+        return item;
+    }
+    const item = openEnvelope(enc, kemSecretKey, sigPublicKey);
+    openedItems.set(enc.id, { signature: enc.envelope.signature, item });
+    return item;
+}
+
 /* --------------------------------------------------------- vault tab */
 
 /**
@@ -134,16 +174,32 @@ function flashSavedBadge(): void {
     }, 20_000);
 }
 
-function resetLockTimer(): void {
+/**
+ * Pushes the auto-lock back by the configured idle time.
+ *
+ * The timer only locks promptly while this worker happens to be alive; the
+ * deadline persisted by `setLockDeadline` is what actually enforces the lock
+ * after the worker has been evicted (see keychain.ts).
+ */
+async function resetLockTimer(): Promise<void> {
     if (lockTimer) clearTimeout(lockTimer);
-    getSettings().then(settings => {
-        if (settings.autoLockMinutes > 0) {
-            lockTimer = setTimeout(() => {
-                setCachedMasterKey(null);
-            }, settings.autoLockMinutes * 60 * 1000);
-        }
-    });
+    lockTimer = null;
+    const settings = await getSettings();
+    if (settings.autoLockMinutes > 0) {
+        const ms = settings.autoLockMinutes * 60 * 1000;
+        await setLockDeadline(Date.now() + ms);
+        lockTimer = setTimeout(() => { void setCachedMasterKey(null); }, ms);
+    } else {
+        await setLockDeadline(null);
+    }
 }
+
+/** Messages that mean someone is using the vault, so the idle lock restarts. */
+const ACTIVITY_MESSAGES = new Set<string>([
+    'GET_ITEMS', 'GET_ITEM_SUMMARY', 'CREATE_ITEM', 'UPDATE_ITEM', 'DELETE_ITEM',
+    'GET_IDENTITIES', 'CREATE_IDENTITY', 'UPDATE_IDENTITY', 'UPDATE_ITEM_LAST_USED',
+    'SAVE_LOGIN_FROM_PAGE', 'WEBAUTHN_CREATE', 'WEBAUTHN_GET',
+]);
 
 async function handleSetupAccount(payload: { email: string; pin: string }): Promise<MessageResponse> {
     try {
@@ -188,7 +244,7 @@ async function handleUnlock(payload: { pin: string }): Promise<MessageResponse> 
             return { success: false, error: 'Invalid PIN' };
         }
         await setCachedMasterKey(masterKey);
-        resetLockTimer();
+        await resetLockTimer();
         return { success: true };
     } catch (e) {
         return { success: false, error: (e as Error).message };
@@ -258,7 +314,7 @@ async function handleGetItems(): Promise<MessageResponse> {
         for (const enc of encryptedItems) {
             if (enc.deletedAt) continue;
             try {
-                const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+                const item = openItem(enc, kemSecretKey, sigKp.publicKey);
                 items.push(item);
             } catch (e) {
                 console.error('Failed to decrypt item:', enc.id, e);
@@ -269,6 +325,19 @@ async function handleGetItems(): Promise<MessageResponse> {
     } catch (e) {
         return { success: false, error: (e as Error).message };
     }
+}
+
+/**
+ * Counts for the popup, read from envelope metadata without decrypting.
+ *
+ * The popup used to call GET_ITEMS — decrypting and shipping every password in
+ * the vault over runtime messaging — only to display `items.length`.
+ */
+async function handleGetItemSummary(): Promise<MessageResponse> {
+    const masterKey = await getCachedMasterKey();
+    if (!masterKey) return { success: true, data: { count: 0 }, locked: true };
+    const count = (await getEncryptedItems()).filter(enc => !enc.deletedAt).length;
+    return { success: true, data: { count } };
 }
 
 async function handleCreateItem(payload: { itemType: ItemType; data: VaultItemData; metadata: VaultItemMetadata }): Promise<MessageResponse> {
@@ -309,7 +378,7 @@ async function handleUpdateItem(payload: { id: string; data: VaultItemData; meta
         const kemSecretKey = await getKemSecretKey();
         if (!kemSecretKey) return { success: false, error: 'Keychain not initialized' };
 
-        const item = openEnvelope(existing, kemSecretKey, sigKp.publicKey);
+        const item = openItem(existing, kemSecretKey, sigKp.publicKey);
         const updated: VaultItem = {
             ...item,
             data: payload.data,
@@ -432,8 +501,6 @@ async function handleGetPageMatches(payload: { url: string }): Promise<MessageRe
         const masterKey = await getCachedMasterKey();
         if (!masterKey) return { success: true, data: [], locked: true };
 
-        const { matchStrength, MATCH_NONE } = await import('../utils/domain');
-
         // Ranked, not filtered: a credential saved for this exact subdomain
         // should outrank one saved for a sibling of the same parent domain.
         const scored: { item: VaultItem; strength: number }[] = [];
@@ -448,7 +515,7 @@ async function handleGetPageMatches(payload: { url: string }): Promise<MessageRe
             let item: VaultItem | null = null;
             if (enc.envelope.itemType === 'login' || strength > MATCH_NONE) {
                 try {
-                    item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+                    item = openItem(enc, kemSecretKey, sigKp.publicKey);
                 } catch (e) {
                     console.error('Failed to decrypt item:', enc.id, e);
                     continue;
@@ -457,7 +524,7 @@ async function handleGetPageMatches(payload: { url: string }): Promise<MessageRe
             if (!item) continue;
 
             if (item.itemType === 'login') {
-                const login = item.data as import('../types').LoginItem;
+                const login = item.data as LoginItem;
                 if (login.url) {
                     strength = Math.max(strength, matchStrength(login.url, payload.url));
                 }
@@ -472,6 +539,69 @@ async function handleGetPageMatches(payload: { url: string }): Promise<MessageRe
         });
 
         return { success: true, data: scored.map(s => s.item) };
+    } catch (e) {
+        return { success: false, error: (e as Error).message };
+    }
+}
+
+export interface IdentifierSuggestion {
+    value: string;
+    kind: 'email' | 'username';
+    /** Logins using it; identities count once each. */
+    uses: number;
+    lastUsedAt: string | null;
+}
+
+/**
+ * Emails and usernames the user already signs up with, most used first.
+ *
+ * Offered on sign-up forms, where there is no saved login to fill yet but the
+ * user almost always reuses one of a handful of addresses. Ranked by how many
+ * logins use the value, then by recency, so a throwaway used once does not
+ * outrank the main address.
+ */
+async function handleGetIdentifierSuggestions(): Promise<MessageResponse> {
+    try {
+        const kemSecretKey = await getKemSecretKey();
+        const sigKp = await getSigKeyPair();
+        if (!kemSecretKey || !sigKp) return { success: true, data: [], locked: true };
+
+        const tally = new Map<string, IdentifierSuggestion>();
+        const add = (raw: string | undefined, lastUsedAt: string | null) => {
+            const value = (raw ?? '').trim();
+            if (!value) return;
+            const key = value.toLowerCase();
+            const kind = value.includes('@') ? 'email' : 'username';
+            const entry = tally.get(key) ?? { value, kind, uses: 0, lastUsedAt: null };
+            entry.uses++;
+            if (lastUsedAt && (!entry.lastUsedAt || lastUsedAt > entry.lastUsedAt)) entry.lastUsedAt = lastUsedAt;
+            tally.set(key, entry);
+        };
+
+        for (const enc of await getEncryptedItems()) {
+            if (enc.deletedAt || enc.envelope.itemType !== 'login') continue;
+            try {
+                const item = openItem(enc, kemSecretKey, sigKp.publicKey);
+                const login = item.data as LoginItem;
+                const used = item.lastUsedAt ?? item.updatedAt;
+                add(login.email, used);
+                if ((login.username ?? '').toLowerCase() !== (login.email ?? '').toLowerCase()) add(login.username, used);
+            } catch {
+                // unreadable items are reported by GET_ITEMS
+            }
+        }
+
+        const identities = await handleGetIdentities();
+        for (const identity of (identities.data ?? []) as Identity[]) {
+            add(identity.email, identity.lastUsedAt ?? identity.updatedAt);
+        }
+
+        const ranked = [...tally.values()].sort((a, b) =>
+            b.uses - a.uses || (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? ''));
+        // Capped per kind, so frequent usernames cannot crowd every email out
+        // of the list an email field filters down to.
+        const top = (kind: IdentifierSuggestion['kind']) => ranked.filter(s => s.kind === kind).slice(0, 8);
+        return { success: true, data: [...top('email'), ...top('username')] };
     } catch (e) {
         return { success: false, error: (e as Error).message };
     }
@@ -658,10 +788,12 @@ async function handleAssignItemToIdentity(payload: { itemId: string; identityId:
         const kemSecretKey = await getKemSecretKey();
         if (!kemSecretKey) return { success: false, error: 'Keychain not initialized' };
 
-        const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+        const item = openItem(enc, kemSecretKey, sigKp.publicKey);
         const updated: VaultItem = { ...item, identityId: payload.identityId, updatedAt: new Date().toISOString() };
         const reencrypted = createEnvelope(updated, kemPubKey, sigKp.secretKey, keychain.deviceId);
         await saveEncryptedItem(reencrypted);
+        // Without this the assignment never left the device.
+        await enqueueUpdate(reencrypted);
 
         return { success: true, data: updated };
     } catch (e) {
@@ -685,10 +817,12 @@ async function handleUnassignItemFromIdentity(payload: { itemId: string }): Prom
         const kemSecretKey = await getKemSecretKey();
         if (!kemSecretKey) return { success: false, error: 'Keychain not initialized' };
 
-        const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+        const item = openItem(enc, kemSecretKey, sigKp.publicKey);
         const updated: VaultItem = { ...item, identityId: null, updatedAt: new Date().toISOString() };
         const reencrypted = createEnvelope(updated, kemPubKey, sigKp.secretKey, keychain.deviceId);
         await saveEncryptedItem(reencrypted);
+        // Without this the assignment never left the device.
+        await enqueueUpdate(reencrypted);
 
         return { success: true, data: updated };
     } catch (e) {
@@ -712,7 +846,7 @@ async function handleUpdateItemLastUsed(payload: { itemId: string }): Promise<Me
         const kemSecretKey = await getKemSecretKey();
         if (!kemSecretKey) return { success: false, error: 'Keychain not initialized' };
 
-        const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+        const item = openItem(enc, kemSecretKey, sigKp.publicKey);
         const updated: VaultItem = { ...item, lastUsedAt: new Date().toISOString() };
         const reencrypted = createEnvelope(updated, kemPubKey, sigKp.secretKey, keychain.deviceId);
         await saveEncryptedItem(reencrypted);
@@ -741,7 +875,7 @@ const passkeyVaultAccess: VaultAccess = {
         for (const enc of await getEncryptedItems()) {
             if (enc.deletedAt || enc.envelope.itemType !== 'passkey') continue;
             try {
-                const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+                const item = openItem(enc, kemSecretKey, sigKp.publicKey);
                 records.push({ itemId: item.id, passkey: item.data as PasskeyItem });
             } catch (e) {
                 console.error('Failed to decrypt passkey:', enc.id, e);
@@ -889,17 +1023,31 @@ async function handleFindLoginForSave(payload: {
         const sigKp = await getSigKeyPair();
         if (!kemSecretKey || !sigKp) return { success: true, data: { status: 'locked' } };
 
-        const { normalizeDomain } = await import('../utils/domain');
-        const domain = normalizeDomain(payload.url);
         const username = payload.username.trim().toLowerCase();
 
         for (const enc of await getEncryptedItems()) {
             if (enc.deletedAt || enc.envelope.itemType !== 'login') continue;
-            if ((enc.envelope.metadata.domain || '') !== domain) continue;
+            // Same registrable domain first (cheap, no decryption), then an
+            // exact host match on the stored domain or URL. Exact only: this
+            // answer decides which item an "update password" overwrites, and a
+            // form on attacker.example.com must not be able to replace the
+            // password saved for example.com. Items store the full host, so the
+            // old equality with the registrable domain (`google.com` vs
+            // `accounts.google.com`) never matched and offered duplicates.
+            if (matchStrength(enc.envelope.metadata.domain || '', payload.url) === MATCH_NONE) continue;
 
-            const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+            const item = openItem(enc, kemSecretKey, sigKp.publicKey);
             const login = item.data as LoginItem;
-            if ((login.username ?? '').trim().toLowerCase() !== username) continue;
+            const exact = matchStrength(enc.envelope.metadata.domain || '', payload.url) === MATCH_EXACT
+                || (!!login.url && matchStrength(login.url, payload.url) === MATCH_EXACT);
+            if (!exact) continue;
+
+            // An empty submitted identifier matches nothing: a password-only
+            // form must not be treated as an update of a login with no email.
+            const identifiers = [login.username, login.email]
+                .map(v => (v ?? '').trim().toLowerCase())
+                .filter(Boolean);
+            if (!username || !identifiers.includes(username)) continue;
 
             return {
                 success: true,
@@ -954,7 +1102,6 @@ async function handleSaveLoginFromPage(payload: {
     itemId?: string;
 }): Promise<MessageResponse> {
     try {
-        const { normalizeDomain, getFullDomain } = await import('../utils/domain');
         const domain = normalizeDomain(payload.url);
 
         if (payload.itemId) {
@@ -965,7 +1112,7 @@ async function handleSaveLoginFromPage(payload: {
             const enc = (await getEncryptedItems()).find(i => i.id === payload.itemId);
             if (!enc) return { success: false, error: 'Item not found' };
 
-            const item = openEnvelope(enc, kemSecretKey, sigKp.publicKey);
+            const item = openItem(enc, kemSecretKey, sigKp.publicKey);
             const login = item.data as LoginItem;
             return handleUpdateItem({
                 id: item.id,
@@ -1127,6 +1274,12 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
             case 'GET_ITEMS':
                 response = await handleGetItems();
                 break;
+            case 'GET_ITEM_SUMMARY':
+                response = await handleGetItemSummary();
+                break;
+            case 'GET_IDENTIFIER_SUGGESTIONS':
+                response = await handleGetIdentifierSuggestions();
+                break;
             case 'CREATE_ITEM':
                 response = await handleCreateItem(message.payload);
                 break;
@@ -1235,6 +1388,10 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
                 break;
             default:
                 response = { success: false, error: 'Unknown message type' };
+        }
+
+        if (ACTIVITY_MESSAGES.has(message.type) && response.success && !response.locked) {
+            void resetLockTimer();
         }
 
         sendResponse(response);

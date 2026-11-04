@@ -36,6 +36,12 @@ ck('suffix trick rejected', d.matchStrength('example.com','https://notexample.co
 ck('www ignored on both sides', d.matchStrength('www.example.com','https://example.com') === d.MATCH_EXACT);
 ck('vaultwarden.pw exact', d.matchStrength('vaultwarden.pw','https://vaultwarden.pw/login') === d.MATCH_EXACT);
 ck('vaultwarden.pw subdomain', d.matchStrength('vaultwarden.pw','https://app.vaultwarden.pw') === d.MATCH_PARENT);
+ck('IP addresses do not collapse to their last two octets', d.matchStrength('192.168.1.1','http://10.0.1.1/') === d.MATCH_NONE, String(d.matchStrength('192.168.1.1','http://10.0.1.1/')));
+ck('same IP is exact', d.matchStrength('192.168.1.1','http://192.168.1.1:8080/') === d.MATCH_EXACT);
+ck('shared hosting siblings do not match', d.matchStrength('alice.github.io','https://attacker.github.io') === d.MATCH_NONE, String(d.matchStrength('alice.github.io','https://attacker.github.io')));
+ck('shared hosting registrable is the tenant', d.getRegistrableDomain('https://docs.alice.github.io') === 'alice.github.io', d.getRegistrableDomain('https://docs.alice.github.io'));
+ck('shared hosting tenant subdomain still PARENT', d.matchStrength('alice.github.io','https://docs.alice.github.io') === d.MATCH_PARENT);
+ck('three-label shared suffix', d.matchStrength('a.up.railway.app','https://b.up.railway.app') === d.MATCH_NONE);
 
 const f=r.filter(x=>!x).length;
 console.log(`\n${r.length-f}/${r.length} checks passed`);

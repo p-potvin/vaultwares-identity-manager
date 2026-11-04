@@ -76,6 +76,7 @@ export default function App() {
     // secondary workflow.
     const [tab, setTab] = useState<Tab>('all');
     const [search, setSearch] = useState('');
+    const [sortBy, setSortBy] = useState<'recent' | 'name' | 'created'>('recent');
     const [editingItem, setEditingItem] = useState<VaultItem | null>(null);
     const [creatingType, setCreatingType] = useState<ItemType | null>(null);
     const [showTypeSelector, setShowTypeSelector] = useState(false);
@@ -149,6 +150,12 @@ export default function App() {
         }
         // Opened from the popup by clicking an item.
         setPendingItemId(params.get('item'));
+        // Opened from the popup's "Open Vault": start filtered to that site.
+        const preset = params.get('search');
+        if (preset) {
+            setTab('all');
+            setSearch(preset);
+        }
     }, [unlocked, loadItems, loadIdentities, loadSettings]);
 
     // The deep-linked item can only be opened once the list has decrypted.
@@ -381,13 +388,29 @@ export default function App() {
         }
         if (search) {
             const q = search.toLowerCase();
+            // Username, email and URL too: "which logins use this address?" is
+            // one of the most common reasons to search a vault.
+            const login = item.itemType === 'login' ? item.data as LoginItem : null;
             return (
                 item.metadata.label.toLowerCase().includes(q) ||
-                item.metadata.domain?.toLowerCase().includes(q) ||
-                item.metadata.tags.some(t => t.toLowerCase().includes(q))
+                !!item.metadata.domain?.toLowerCase().includes(q) ||
+                item.metadata.tags.some(t => t.toLowerCase().includes(q)) ||
+                !!login?.username?.toLowerCase().includes(q) ||
+                !!login?.email?.toLowerCase().includes(q) ||
+                !!login?.url?.toLowerCase().includes(q)
             );
         }
         return true;
+    });
+
+    // Favorites first, then the chosen order. Items used to appear in storage
+    // order, i.e. oldest first, which buried whatever was just added or used.
+    const recency = (item: VaultItem) => item.lastUsedAt ?? item.updatedAt ?? item.createdAt;
+    filteredItems.sort((a, b) => {
+        if (a.metadata.favorite !== b.metadata.favorite) return a.metadata.favorite ? -1 : 1;
+        if (sortBy === 'name') return a.metadata.label.localeCompare(b.metadata.label, undefined, { sensitivity: 'base' });
+        if (sortBy === 'created') return b.createdAt.localeCompare(a.createdAt);
+        return recency(b).localeCompare(recency(a));
     });
 
     const navItems: { tab: Tab; label: string; icon: React.ReactNode }[] = [
@@ -406,40 +429,44 @@ export default function App() {
     return (
         <div className="flex h-screen overflow-hidden">
             {/* Warm-mode sidebar */}
-            <aside className="vw-warm-shell w-60 flex-shrink-0 flex flex-col border-r border-[#161320]/8">
-                <div className="px-5 py-5 border-b border-[#161320]/8">
+            {/* Icon rail below md: a fixed 240px sidebar left 240px for content in a narrow window. */}
+            <aside className="vw-warm-shell w-16 md:w-60 flex-shrink-0 flex flex-col border-r border-[#161320]/8">
+                <div className="px-4 md:px-5 py-5 border-b border-[#161320]/8">
                     <div className="flex items-center gap-2.5">
-                        <Shield className="w-7 h-7 text-[#D6A441]" />
-                        <div>
+                        <Shield className="w-7 h-7 text-[#D6A441] flex-shrink-0" />
+                        <div className="hidden md:block">
                             <div className="text-sm font-bold text-[#161320]">VaultWares</div>
                             <div className="text-[10px] text-[#161320]/50 uppercase tracking-wider">Identity Vault</div>
                         </div>
                     </div>
                 </div>
-                <nav className="flex-1 px-3 py-3 space-y-0.5 overflow-y-auto">
+                <nav className="flex-1 px-2 md:px-3 py-3 space-y-0.5 overflow-y-auto">
                     {navItems.map(({ tab: t, label, icon }) => (
                         <button
                             key={t}
                             onClick={() => { setTab(t); setEditingItem(null); setCreatingType(null); }}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
+                            title={label}
+                            aria-label={label}
+                            className={`w-full flex items-center justify-center md:justify-start gap-2.5 px-3 py-2 rounded-lg text-sm transition-colors ${
                                 tab === t
                                     ? 'bg-[#D6A441]/15 text-[#D6A441] font-medium'
                                     : 'text-[#161320]/70 hover:bg-[#161320]/5'
                             }`}
                         >
                             {icon}
-                            {label}
+                            <span className="hidden md:inline">{label}</span>
                         </button>
                     ))}
                 </nav>
-                <div className="px-3 py-3 border-t border-[#161320]/8">
+                <div className="px-2 md:px-3 py-3 border-t border-[#161320]/8">
                     <button
                         onClick={handleSync}
                         disabled={syncing}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-[#161320]/70 hover:bg-[#161320]/5 transition-colors disabled:opacity-60"
+                        title="Sync"
+                        className="w-full flex items-center justify-center md:justify-start gap-2 px-3 py-2 rounded-lg text-sm text-[#161320]/70 hover:bg-[#161320]/5 transition-colors disabled:opacity-60"
                     >
                         <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-                        <span className="flex-1 text-left">Sync</span>
+                        <span className="hidden md:inline flex-1 text-left">Sync</span>
                         {!syncing && syncStatus?.state === 'ok' && (
                             <Check className="w-3.5 h-3.5 text-vw-signal-online" />
                         )}
@@ -447,39 +474,40 @@ export default function App() {
                             <AlertCircle className="w-3.5 h-3.5 text-vw-signal-alert" />
                         )}
                     </button>
-                    <SyncStatusLine status={syncStatus} syncing={syncing} />
+                    <div className="hidden md:block"><SyncStatusLine status={syncStatus} syncing={syncing} /></div>
                     <button
                         onClick={handleLock}
-                        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-[#161320]/70 hover:bg-[#161320]/5 transition-colors"
+                        title="Lock Vault"
+                        className="w-full flex items-center justify-center md:justify-start gap-2 px-3 py-2 rounded-lg text-sm text-[#161320]/70 hover:bg-[#161320]/5 transition-colors"
                     >
                         <Lock className="w-4 h-4" />
-                        Lock Vault
+                        <span className="hidden md:inline">Lock Vault</span>
                     </button>
                 </div>
             </aside>
 
             {/* Console-mode content */}
-            <main className="vw-console-shell flex-1 overflow-y-auto">
-                <div className="p-8">
+            <main className="vw-console-shell flex-1 min-w-0 overflow-y-auto">
+                <div className="p-4 sm:p-6 lg:p-8">
                     {/* Identities view */}
                     {tab === 'identities' && !selectedIdentity && (
                         <>
-                            <div className="flex items-center justify-between mb-6">
+                            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
                                 <div>
                                     <h1 className="text-2xl font-bold text-white">Identities</h1>
                                     <p className="text-sm text-vw-console-text-secondary mt-1">
                                         {identities.length} {identities.length === 1 ? 'identity' : 'identities'}
                                     </p>
                                 </div>
-                                <div className="flex items-center gap-3">
-                                    <div className="relative">
+                                <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                                    <div className="relative basis-full sm:basis-auto flex-1 sm:flex-none min-w-0">
                                         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-vw-console-text-secondary" />
                                         <input
                                             type="search"
                                             value={search}
                                             onChange={(e) => setSearch(e.target.value)}
                                             placeholder="Search identities…"
-                                            className="pl-9 pr-4 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold w-64"
+                                            className="pl-9 pr-4 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold w-full sm:w-64"
                                         />
                                     </div>
                                     <button
@@ -585,7 +613,7 @@ export default function App() {
                     {/* Existing item views (not identities, generator, settings, devices) */}
                     {tab !== 'identities' && tab !== 'generator' && tab !== 'settings' && tab !== 'devices' && (
                         <>
-                            <div className="flex items-center justify-between mb-6">
+                            <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
                                 <div>
                                     <h1 className="text-2xl font-bold text-white capitalize">
                                         {tab === 'all' ? 'All Items' : tab}
@@ -594,17 +622,27 @@ export default function App() {
                                         {filteredItems.length} {filteredItems.length === 1 ? 'item' : 'items'}
                                     </p>
                                 </div>
-                                <div className="flex items-center gap-3">
-                                    <div className="relative">
+                                <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                                    <div className="relative basis-full sm:basis-auto flex-1 sm:flex-none min-w-0">
                                         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-vw-console-text-secondary" />
                                         <input
                                             type="search"
                                             value={search}
                                             onChange={(e) => setSearch(e.target.value)}
                                             placeholder="Search…"
-                                            className="pl-9 pr-4 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold w-64"
+                                            className="pl-9 pr-4 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold w-full sm:w-64"
                                         />
                                     </div>
+                                    <select
+                                        value={sortBy}
+                                        onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                                        aria-label="Sort items"
+                                        className="px-3 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold"
+                                    >
+                                        <option value="recent">Recently used</option>
+                                        <option value="name">Name A–Z</option>
+                                        <option value="created">Newest</option>
+                                    </select>
                                     <button
                                         onClick={startNewItem}
                                         className="flex items-center gap-2 px-4 py-2 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431]"
@@ -672,6 +710,26 @@ export default function App() {
         </div>
     );
 }
+
+/**
+ * Delete that needs a second click within a few seconds.
+ *
+ * Deletion is permanent — there is no trash — and it syncs, so a single
+ * misclick next to Save used to erase an item everywhere.
+ */
+const ConfirmDeleteButton = ({ onConfirm, className }: { onConfirm: () => void; className: string }) => {
+    const [armed, setArmed] = useState(false);
+    useEffect(() => {
+        if (!armed) return;
+        const timer = setTimeout(() => setArmed(false), 4000);
+        return () => clearTimeout(timer);
+    }, [armed]);
+    return (
+        <button onClick={() => (armed ? onConfirm() : setArmed(true))} className={`${className} ${armed ? 'font-semibold' : ''}`}>
+            <Trash2 className="w-4 h-4" /> {armed ? 'Click again to delete permanently' : 'Delete'}
+        </button>
+    );
+};
 
 function ItemCard({ item, onClick }: { item: VaultItem; onClick: () => void }) {
     const config = ITEM_TYPE_CONFIG[item.itemType];
@@ -813,7 +871,7 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: 
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onCancel}>
             <div className="vw-card p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
                     <h2 className="text-lg font-semibold text-white">{item ? 'Edit' : 'New'} {ITEM_TYPE_CONFIG[itemType].label}</h2>
                     <button onClick={onCancel} className="text-vw-console-text-secondary hover:text-white"><X className="w-5 h-5" /></button>
                 </div>
@@ -963,9 +1021,7 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: 
                 <div className="flex items-center justify-between mt-6 pt-4 border-t border-vw-console-border">
                     <div>
                         {onDelete && (
-                            <button onClick={onDelete} className="flex items-center gap-1.5 px-3 py-2 text-sm text-vw-signal-alert hover:bg-vw-signal-alert/10 rounded-lg">
-                                <Trash2 className="w-4 h-4" /> Delete
-                            </button>
+                            <ConfirmDeleteButton onConfirm={onDelete} className="flex items-center gap-1.5 px-3 py-2 text-sm text-vw-signal-alert hover:bg-vw-signal-alert/10 rounded-lg" />
                         )}
                     </div>
                     <div className="flex items-center gap-2">
@@ -1158,7 +1214,7 @@ function ItemTypeSelector({ onSelect, onCancel }: {
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onCancel}>
             <div className="vw-card p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
                     <h2 className="text-lg font-semibold text-white">New Item Type</h2>
                     <button onClick={onCancel} className="text-vw-console-text-secondary hover:text-white"><X className="w-5 h-5" /></button>
                 </div>
@@ -1492,7 +1548,7 @@ function IdentityEditorModal({ mode, data, onSave, onCancel }: {
     return (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onCancel}>
             <div className="vw-card p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between mb-6">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
                     <div className="flex items-center gap-2">
                         {mode === 'review' ? <Sparkles className="w-5 h-5 text-vw-gold" /> : <User className="w-5 h-5 text-vw-gold" />}
                         <h2 className="text-lg font-semibold text-white">{title}</h2>
@@ -1620,9 +1676,7 @@ function IdentityDetailView({ identity, items, allItems, onBack, onDelete, onEdi
                     <button onClick={onEdit} className="text-vw-console-text-secondary hover:text-white text-sm flex items-center gap-1">
                         <Settings className="w-4 h-4" /> Edit
                     </button>
-                    <button onClick={onDelete} className="text-vw-signal-alert/60 hover:text-vw-signal-alert text-sm flex items-center gap-1">
-                        <Trash2 className="w-4 h-4" /> Delete
-                    </button>
+                    <ConfirmDeleteButton onConfirm={onDelete} className="text-vw-signal-alert/60 hover:text-vw-signal-alert text-sm flex items-center gap-1" />
                 </div>
             </div>
 

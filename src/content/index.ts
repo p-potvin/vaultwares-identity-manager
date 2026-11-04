@@ -19,8 +19,27 @@ import {
 import { showMenu, closeMenu, isMenuOpen, isAnchorAlive } from './menu';
 import { showSavePrompt } from './save-prompt';
 import { t } from '../i18n/strings';
+// Static: a dynamic import() from a content script loads its chunk with a
+// <script> tag, which runs in the page's world rather than this one.
+import { generateFromPreset, PRESETS } from '../utils/password-generator';
+import { generateTotpCode } from '../utils/totp';
+
+function currentTotp(secret: string): string {
+    try {
+        return generateTotpCode(secret);
+    } catch {
+        return '';
+    }
+}
 import { loginIdentifier } from '../types';
 import type { VaultItem, LoginItem, CardItem, AddressItem, PasskeyItem, VaultSettings, Identity } from '../types';
+
+interface IdentifierSuggestion {
+    value: string;
+    kind: 'email' | 'username';
+    uses: number;
+    lastUsedAt: string | null;
+}
 
 interface PageIdentity {
     identity: Identity;
@@ -75,7 +94,10 @@ function fillDataForItem(item: VaultItem): Partial<Record<FieldRole, string>> {
                 email: email || username,
                 password: login.password || '',
                 newPassword: login.password || '',
-                totp: login.totpSecret || '',
+                // The current code, never the secret: the secret used to be
+                // typed into the site's one-time-code box, handing the page the
+                // seed for every future code.
+                totp: login.totpSecret ? currentTotp(login.totpSecret) : '',
             };
         }
         case 'card': {
@@ -153,9 +175,17 @@ async function openMenuFor(field: DetectedField): Promise<void> {
     const form = formForElement(forms, field.element);
     if (!form) return;
 
-    const [response, identityResponse] = await Promise.all([
+    // Sign-up forms get the addresses the user already uses elsewhere: there is
+    // no saved login to fill yet, but people reuse a handful of identifiers.
+    const wantsIdentifierSuggestions = form.kind === 'signup'
+        && (field.role === 'email' || field.role === 'username');
+
+    const [response, identityResponse, suggestionResponse] = await Promise.all([
         send<VaultItem[]>('GET_PAGE_MATCHES', { url: window.location.href }),
         send<PageIdentity[]>('GET_PAGE_IDENTITIES', { url: window.location.href }),
+        wantsIdentifierSuggestions
+            ? send<IdentifierSuggestion[]>('GET_IDENTIFIER_SUGGESTIONS')
+            : Promise.resolve({ success: true, data: [] as IdentifierSuggestion[] }),
     ]);
     const matches = response.data ?? [];
 
@@ -170,10 +200,16 @@ async function openMenuFor(field: DetectedField): Promise<void> {
     const passkeys = matches.filter(item => item.itemType === 'passkey');
     const fillable = matches.filter(item => item.itemType !== 'passkey');
 
-    const grouped = [...fillable].sort((a, b) => {
-        if (!!a.identityId !== !!b.identityId) return a.identityId ? -1 : 1;
-        return (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? '');
-    });
+    // Most recently used first. The background returns matches ranked by how
+    // closely the host matches, and the sort is stable, so never-used items
+    // keep that order. Grouping by identity first used to break the recency
+    // order, and its group header was the item label's first word rather than
+    // the identity's name.
+    const ordered = [...fillable].sort((a, b) =>
+        (b.lastUsedAt ?? '').localeCompare(a.lastUsedAt ?? ''));
+    const identityNames = new Map(
+        (identityResponse.data ?? []).map(({ identity }) => [identity.id, identity.fullName || identity.email]),
+    );
 
     const identityEntries = identities.map(({ identity, linkedToDomain }) => ({
         id: `identity:${identity.id}`,
@@ -187,11 +223,11 @@ async function openMenuFor(field: DetectedField): Promise<void> {
         },
     }));
 
-    const itemEntries = grouped.map(item => ({
+    const itemEntries = ordered.map(item => ({
         id: item.id,
         label: item.metadata.label,
         sublabel: subtitleFor(item),
-        group: item.identityId ? (item.metadata.label.split(' ')[0] || t('menuIdentityFallback')) : undefined,
+        badge: item.identityId ? (identityNames.get(item.identityId) || t('menuIdentityFallback')) : undefined,
         onChoose: () => {
             fillForm(form, fillDataForItem(item));
             void send('UPDATE_ITEM_LAST_USED', { itemId: item.id });
@@ -210,9 +246,28 @@ async function openMenuFor(field: DetectedField): Promise<void> {
         || form.kind === 'signup'
         || form.kind === 'changePassword';
 
+    const suggestionRole = field.role as 'email' | 'username';
+    const suggestionEntries = (suggestionResponse.data ?? [])
+        // An email fits a username box, but a bare username does not fit an
+        // email box.
+        .filter(s => suggestionRole === 'username' || s.kind === 'email')
+        .slice(0, 6)
+        .map(s => ({
+            id: `suggest:${s.value}`,
+            label: s.value,
+            sublabel: s.uses === 1 ? t('menuSuggestUsedOnce') : t('menuSuggestUsedCount', { count: String(s.uses) }),
+            group: s.kind === 'email' ? t('menuSuggestEmailsGroup') : t('menuSuggestUsernamesGroup'),
+            onChoose: () => {
+                // Only the focused box: the rest of a sign-up form is the
+                // user's to fill, or a persona's.
+                fillForm({ ...form, fields: [field] }, { [field.role]: s.value });
+            },
+        }));
+
     const generateEntry = wantsNewPassword && !locked
         ? [{
             id: 'generate-password',
+            pinned: true,
             label: t('menuGeneratePassword'),
             sublabel: t('menuGeneratePasswordHint'),
             badge: t('menuGenerateBadge'),
@@ -230,8 +285,11 @@ async function openMenuFor(field: DetectedField): Promise<void> {
         // Personas first on a sign-up form: filling the persona is the step that
         // comes before choosing a login there.
         entries: form.kind === 'signup'
-            ? [...generateEntry, ...identityEntries, ...itemEntries]
+            ? [...generateEntry, ...suggestionEntries, ...identityEntries, ...itemEntries]
             : [...itemEntries, ...identityEntries, ...generateEntry],
+        // Typing a username narrows the list; typing a password is not a search.
+        filterOnInput: field.element.type !== 'password',
+        noFilterMatchesMessage: t('menuNoFilterMatches'),
         footerLabel: t('menuCreateForSite'),
         onFooter: () => {
             void send('OPEN_POPUP_CREATE', { url: window.location.href });
@@ -248,7 +306,6 @@ async function openMenuFor(field: DetectedField): Promise<void> {
  * common way a generated password fails to take.
  */
 async function fillGeneratedPassword(form: DetectedForm): Promise<void> {
-    const { generateFromPreset, PRESETS } = await import('../utils/password-generator');
     const preset = PRESETS.find(p => p.id === settings?.defaultGeneratorPreset) ?? PRESETS[0];
     const password = await generateFromPreset(preset);
 

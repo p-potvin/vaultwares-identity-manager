@@ -139,9 +139,47 @@ export async function isInitialized(): Promise<boolean> {
 
 let cachedMasterKey: Uint8Array | null = null;
 const SESSION_KEY = 'vw_session_master_key';
+const LOCK_AT_KEY = 'vw_session_lock_at';
+
+/** Epoch ms after which the cached key is discarded; null means no auto-lock. */
+let lockAt: number | null = null;
+const lockListeners: Array<() => void> = [];
+
+/** Called whenever the cached key is dropped, by an explicit lock or a deadline. */
+export function onMasterKeyCleared(listener: () => void): void {
+    lockListeners.push(listener);
+}
+
+/**
+ * Sets when the vault auto-locks.
+ *
+ * A deadline, not a timer. The extension's background is an MV3 service worker
+ * that the browser evicts after ~30s idle, taking any `setTimeout` with it —
+ * while the master key survives in `chrome.storage.session`. A timer-based
+ * auto-lock therefore never fired once the worker had slept, and the vault
+ * stayed open until the browser closed. The deadline is persisted next to the
+ * key and checked on every read, so it holds across evictions.
+ */
+export async function setLockDeadline(at: number | null): Promise<void> {
+    lockAt = at;
+    try {
+        if (at === null) await sessionStore.remove(LOCK_AT_KEY);
+        else await sessionStore.set({ [LOCK_AT_KEY]: at });
+    } catch {
+        // the session area may not be available in every context
+    }
+}
+
+function clearCachedKeyState(): void {
+    const wasUnlocked = cachedMasterKey !== null;
+    cachedMasterKey = null;
+    lockAt = null;
+    if (wasUnlocked) for (const listener of lockListeners) listener();
+}
 
 export async function setCachedMasterKey(key: Uint8Array | null): Promise<void> {
-    cachedMasterKey = key;
+    if (key) cachedMasterKey = key;
+    else clearCachedKeyState();
     if (key) {
         try {
             // The session area is in-memory on both platforms: chrome.storage.session
@@ -152,7 +190,7 @@ export async function setCachedMasterKey(key: Uint8Array | null): Promise<void> 
         }
     } else {
         try {
-            await sessionStore.remove(SESSION_KEY);
+            await sessionStore.remove([SESSION_KEY, LOCK_AT_KEY]);
         } catch {
             // ignore
         }
@@ -160,12 +198,25 @@ export async function setCachedMasterKey(key: Uint8Array | null): Promise<void> 
 }
 
 export async function getCachedMasterKey(): Promise<Uint8Array | null> {
-    if (cachedMasterKey) return cachedMasterKey;
+    if (cachedMasterKey) {
+        if (lockAt !== null && Date.now() >= lockAt) {
+            await setCachedMasterKey(null);
+            return null;
+        }
+        return cachedMasterKey;
+    }
     try {
-        const result = await sessionStore.get(SESSION_KEY) as Record<string, any>;
+        const result = await sessionStore.get([SESSION_KEY, LOCK_AT_KEY]);
         const stored = result[SESSION_KEY] as string | undefined;
+        const storedLockAt = result[LOCK_AT_KEY] as number | undefined;
         if (stored) {
+            // Woken after an eviction: honour the deadline set before it.
+            if (typeof storedLockAt === 'number' && Date.now() >= storedLockAt) {
+                await setCachedMasterKey(null);
+                return null;
+            }
             cachedMasterKey = fromBase64(stored);
+            lockAt = typeof storedLockAt === 'number' ? storedLockAt : null;
             return cachedMasterKey;
         }
     } catch {

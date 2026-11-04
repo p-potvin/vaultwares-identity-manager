@@ -20,6 +20,29 @@ const MULTI_LABEL_SUFFIXES = new Set([
     'com.sg', 'co.in', 'qc.ca', 'on.ca', 'gc.ca',
 ]);
 
+/**
+ * Shared-hosting suffixes where every subdomain belongs to a different owner
+ * (the "private" section of the Public Suffix List). Without these,
+ * `alice.github.io` and `attacker.github.io` share a registrable domain, so a
+ * login saved for one was offered — as RELATED — on the other.
+ *
+ * Not the full PSL. Shipping the real list is the proper fix; this covers the
+ * hosts where a stranger can trivially get a sibling subdomain.
+ */
+const SHARED_HOSTING_SUFFIXES = new Set([
+    'github.io', 'gitlab.io', 'herokuapp.com', 'vercel.app', 'netlify.app', 'pages.dev',
+    'workers.dev', 'web.app', 'firebaseapp.com', 'appspot.com', 'blogspot.com',
+    'azurewebsites.net', 'azurestaticapps.net', 'cloudfront.net', 'onrender.com', 'fly.dev',
+    'glitch.me', 'ngrok.io', 'ngrok-free.app', 'repl.co', 'replit.app', 'surge.sh',
+    'wordpress.com', 'myshopify.com', 'webflow.io', 'notion.site', 'carrd.co',
+    's3.amazonaws.com', 'amplifyapp.com', 'deno.dev', 'railway.app', 'up.railway.app',
+]);
+
+/** IPv4, or IPv6 as URL.hostname renders it (`[::1]`). */
+function isIpAddress(host: string): boolean {
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.startsWith('[');
+}
+
 /** Parses input that may or may not carry a scheme. */
 function toUrl(input: string): URL | null {
     if (!input) return null;
@@ -43,7 +66,16 @@ export function getRegistrableDomain(input: string): string {
     const host = getHost(input);
     if (!host) return '';
 
+    // An address has no registrable part: `192.168.1.1` used to reduce to
+    // `1.1`, matching every other address ending in .1.1.
+    if (isIpAddress(host)) return host;
+
     const parts = host.split('.');
+    for (const length of [3, 2]) {
+        if (parts.length > length && SHARED_HOSTING_SUFFIXES.has(parts.slice(-length).join('.'))) {
+            return parts.slice(-(length + 1)).join('.');
+        }
+    }
     if (parts.length <= 2) return host;
 
     const lastTwo = parts.slice(-2).join('.');
