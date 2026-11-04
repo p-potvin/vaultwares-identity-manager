@@ -14,6 +14,7 @@ import { t } from '../i18n/strings';
 import { useAutoUnlock } from '../utils/use-auto-unlock';
 import { ImportPanel } from './ImportPanel';
 import { EnrollPanel } from './EnrollPanel';
+import { KitRestorePanel } from './KitRestorePanel';
 
 /** A blank persona for the manual create path — no generation service involved. */
 function emptyIdentityData(): GeneratedIdentityData {
@@ -58,11 +59,11 @@ function send<T>(msg: { type: string; payload?: any }): Promise<{ success: boole
 type Tab = 'identities' | 'all' | 'logins' | 'addresses' | 'cards' | 'totp' | 'passkeys' | 'generator' | 'settings' | 'devices';
 
 const ITEM_TYPE_CONFIG: Record<ItemType, { label: string; icon: React.ReactNode; color: string }> = {
-    login: { label: 'Login', icon: <Key className="w-4 h-4" />, color: 'text-vw-gold' },
-    address: { label: 'Address', icon: <MapPin className="w-4 h-4" />, color: 'text-vw-signal-relay' },
-    card: { label: 'Card', icon: <CreditCard className="w-4 h-4" />, color: 'text-vw-signal-online' },
-    totp: { label: 'TOTP', icon: <Clock className="w-4 h-4" />, color: 'text-vw-signal-sync' },
-    passkey: { label: 'Passkey', icon: <Fingerprint className="w-4 h-4" />, color: 'text-vw-violet' },
+    login: { label: t('typeLogin'), icon: <Key className="w-4 h-4" />, color: 'text-vw-gold' },
+    address: { label: t('typeAddress'), icon: <MapPin className="w-4 h-4" />, color: 'text-vw-signal-relay' },
+    card: { label: t('typeCard'), icon: <CreditCard className="w-4 h-4" />, color: 'text-vw-signal-online' },
+    totp: { label: t('typeTotp'), icon: <Clock className="w-4 h-4" />, color: 'text-vw-signal-sync' },
+    passkey: { label: t('typePasskey'), icon: <Fingerprint className="w-4 h-4" />, color: 'text-vw-violet' },
 };
 
 export default function App() {
@@ -91,6 +92,7 @@ export default function App() {
     const [generatingIdentity, setGeneratingIdentity] = useState(false);
     const [identityEditor, setIdentityEditor] = useState<IdentityEditorState | null>(null);
     const [identityError, setIdentityError] = useState('');
+    const [showKitRestore, setShowKitRestore] = useState(false);
 
     const checkInit = useCallback(async () => {
         const resp = await send<{ initialized: boolean }>({ type: 'INIT_CHECK' });
@@ -202,7 +204,7 @@ export default function App() {
         } else {
             // Only an explicit submit reports failure; the background attempts
             // stay silent so a half-typed PIN does not read as an error.
-            setError(resp.error ?? 'Unlock failed');
+            setError(resp.error ?? t('popupUnlockFailed'));
         }
     };
 
@@ -268,7 +270,7 @@ export default function App() {
         if (resp.success && resp.data) {
             setIdentityEditor({ mode: 'review', data: resp.data, identity: null });
         } else {
-            setIdentityError(resp.error || 'Generation is unavailable — fill the identity in manually.');
+            setIdentityError(resp.error || t('vaultGenerationUnavailable'));
             setIdentityEditor({ mode: 'create', data: emptyIdentityData(), identity: null });
         }
     };
@@ -285,7 +287,7 @@ export default function App() {
             : await send<Identity>({ type: 'CREATE_IDENTITY', payload: { data } });
 
         if (!resp.success) {
-            setIdentityError(resp.error || 'Could not save the identity');
+            setIdentityError(resp.error || t('vaultCouldNotSaveIdentity'));
             return;
         }
 
@@ -325,13 +327,13 @@ export default function App() {
             <div className="vw-warm-shell min-h-screen flex items-center justify-center p-8">
                 <div className="vw-warm-card p-10 max-w-md text-center">
                     <Shield className="w-12 h-12 text-vw-gold mx-auto mb-4" />
-                    <h1 className="text-xl font-bold text-[#161320] mb-2">Vault Not Set Up</h1>
-                    <p className="text-sm text-[#161320]/70 mb-6">Complete the onboarding to create your encrypted vault.</p>
+                    <h1 className="text-xl font-bold text-[#161320] mb-2">{t('vaultNotSetUp')}</h1>
+                    <p className="text-sm text-[#161320]/70 mb-6">{t('vaultNotSetUpBody')}</p>
                     <button
                         onClick={() => chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') })}
                         className="w-full py-3 bg-[#D6A441] text-white rounded-lg font-medium hover:bg-[#C69431]"
                     >
-                        Start Setup
+                        {t('actionStartSetup')}
                     </button>
                 </div>
             </div>
@@ -347,8 +349,8 @@ export default function App() {
                             <Lock className="w-5 h-5 text-vw-gold" />
                         </div>
                         <div>
-                            <h1 className="text-lg font-semibold text-white">Unlock Vault</h1>
-                            <p className="text-xs text-vw-console-text-secondary">Enter your PIN to decrypt locally</p>
+                            <h1 className="text-lg font-semibold text-white">{t('vaultUnlockTitle')}</h1>
+                            <p className="text-xs text-vw-console-text-secondary">{t('vaultUnlockSubtitle')}</p>
                         </div>
                     </div>
                     <div className="relative mb-3">
@@ -374,8 +376,20 @@ export default function App() {
                         className="w-full py-3 bg-vw-gold text-vw-console-bg rounded-lg font-medium hover:bg-[#C69431] disabled:opacity-50 flex items-center justify-center gap-2"
                     >
                         {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
-                        Unlock
+                        {t('actionUnlock')}
                     </button>
+                    <div className="mt-4 pt-4 border-t border-vw-console-border/50">
+                        {!showKitRestore ? (
+                            <button
+                                onClick={() => setShowKitRestore(true)}
+                                className="text-xs text-vw-console-text-secondary hover:text-white transition-colors"
+                            >
+                                {t('kitRestoreLink')}
+                            </button>
+                        ) : (
+                            <KitRestorePanel onRestored={handleUnlocked} />
+                        )}
+                    </div>
                 </div>
             </div>
         );
@@ -414,16 +428,16 @@ export default function App() {
     });
 
     const navItems: { tab: Tab; label: string; icon: React.ReactNode }[] = [
-        { tab: 'identities', label: 'Identities', icon: <Users className="w-4 h-4" /> },
-        { tab: 'all', label: settings?.vaultSectionName ?? 'Vault', icon: <Shield className="w-4 h-4" /> },
-        { tab: 'logins', label: 'Logins', icon: <Key className="w-4 h-4" /> },
-        { tab: 'addresses', label: 'Addresses', icon: <MapPin className="w-4 h-4" /> },
-        { tab: 'cards', label: 'Cards', icon: <CreditCard className="w-4 h-4" /> },
+        { tab: 'identities', label: t('vaultIdentitiesTitle'), icon: <Users className="w-4 h-4" /> },
+        { tab: 'all', label: settings?.vaultSectionName ?? t('vaultNavVault'), icon: <Shield className="w-4 h-4" /> },
+        { tab: 'logins', label: t('vaultNavLogins'), icon: <Key className="w-4 h-4" /> },
+        { tab: 'addresses', label: t('vaultNavAddresses'), icon: <MapPin className="w-4 h-4" /> },
+        { tab: 'cards', label: t('vaultNavCards'), icon: <CreditCard className="w-4 h-4" /> },
         { tab: 'totp', label: 'TOTP', icon: <Clock className="w-4 h-4" /> },
-        { tab: 'passkeys', label: 'Passkeys', icon: <Fingerprint className="w-4 h-4" /> },
-        { tab: 'generator', label: 'Generator', icon: <RefreshCw className="w-4 h-4" /> },
-        { tab: 'devices', label: 'Devices', icon: <Monitor className="w-4 h-4" /> },
-        { tab: 'settings', label: 'Settings', icon: <Settings className="w-4 h-4" /> },
+        { tab: 'passkeys', label: t('vaultNavPasskeys'), icon: <Fingerprint className="w-4 h-4" /> },
+        { tab: 'generator', label: t('vaultNavGenerator'), icon: <RefreshCw className="w-4 h-4" /> },
+        { tab: 'devices', label: t('vaultNavDevices'), icon: <Monitor className="w-4 h-4" /> },
+        { tab: 'settings', label: t('vaultNavSettings'), icon: <Settings className="w-4 h-4" /> },
     ];
 
     return (
@@ -436,7 +450,7 @@ export default function App() {
                         <Shield className="w-7 h-7 text-[#D6A441] flex-shrink-0" />
                         <div className="hidden md:block">
                             <div className="text-sm font-bold text-[#161320]">VaultWares</div>
-                            <div className="text-[10px] text-[#161320]/50 uppercase tracking-wider">Identity Vault</div>
+                            <div className="text-[10px] text-[#161320]/50 uppercase tracking-wider">{t('vaultIdentityVault')}</div>
                         </div>
                     </div>
                 </div>
@@ -462,11 +476,11 @@ export default function App() {
                     <button
                         onClick={handleSync}
                         disabled={syncing}
-                        title="Sync"
+                        title={t('vaultSync')}
                         className="w-full flex items-center justify-center md:justify-start gap-2 px-3 py-2 rounded-lg text-sm text-[#161320]/70 hover:bg-[#161320]/5 transition-colors disabled:opacity-60"
                     >
                         <RefreshCw className={`w-4 h-4 ${syncing ? 'animate-spin' : ''}`} />
-                        <span className="hidden md:inline flex-1 text-left">Sync</span>
+                        <span className="hidden md:inline flex-1 text-left">{t('vaultSync')}</span>
                         {!syncing && syncStatus?.state === 'ok' && (
                             <Check className="w-3.5 h-3.5 text-vw-signal-online" />
                         )}
@@ -477,11 +491,11 @@ export default function App() {
                     <div className="hidden md:block"><SyncStatusLine status={syncStatus} syncing={syncing} /></div>
                     <button
                         onClick={handleLock}
-                        title="Lock Vault"
+                        title={t('vaultLockVault')}
                         className="w-full flex items-center justify-center md:justify-start gap-2 px-3 py-2 rounded-lg text-sm text-[#161320]/70 hover:bg-[#161320]/5 transition-colors"
                     >
                         <Lock className="w-4 h-4" />
-                        <span className="hidden md:inline">Lock Vault</span>
+                        <span className="hidden md:inline">{t('vaultLockVault')}</span>
                     </button>
                 </div>
             </aside>
@@ -494,9 +508,9 @@ export default function App() {
                         <>
                             <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
                                 <div>
-                                    <h1 className="text-2xl font-bold text-white">Identities</h1>
+                                    <h1 className="text-2xl font-bold text-white">{t('vaultIdentitiesTitle')}</h1>
                                     <p className="text-sm text-vw-console-text-secondary mt-1">
-                                        {identities.length} {identities.length === 1 ? 'identity' : 'identities'}
+                                        {t(identities.length === 1 ? 'vaultOneIdentity' : 'vaultManyIdentities', { n: String(identities.length) })}
                                     </p>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
@@ -506,7 +520,7 @@ export default function App() {
                                             type="search"
                                             value={search}
                                             onChange={(e) => setSearch(e.target.value)}
-                                            placeholder="Search identities…"
+                                            placeholder={t('vaultSearchIdentities')}
                                             className="pl-9 pr-4 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold w-full sm:w-64"
                                         />
                                     </div>
@@ -520,11 +534,11 @@ export default function App() {
                                     <button
                                         onClick={handleGenerateIdentity}
                                         disabled={generatingIdentity}
-                                        title="Requires a generation endpoint in Settings"
+                                        title={t('vaultRequiresEndpoint')}
                                         className="flex items-center gap-2 px-4 py-2 border border-vw-console-border text-vw-console-text-secondary rounded-lg text-sm font-medium hover:text-white hover:bg-vw-console-raised disabled:opacity-50"
                                     >
                                         {generatingIdentity ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                                        Generate
+                                        {t('actionGenerate')}
                                     </button>
                                 </div>
                             </div>
@@ -539,12 +553,12 @@ export default function App() {
                             {dataLoading ? (
                                 <div className="text-center py-20">
                                     <Loader2 className="w-8 h-8 text-vw-gold animate-spin mx-auto mb-3" />
-                                    <p className="text-sm text-vw-console-text-secondary">Decrypting vault…</p>
+                                    <p className="text-sm text-vw-console-text-secondary">{t('vaultDecrypting')}</p>
                                 </div>
                             ) : identities.length === 0 && !generatingIdentity ? (
                                 <div className="text-center py-20">
                                     <Users className="w-12 h-12 text-vw-console-text-secondary/30 mx-auto mb-3" />
-                                    <p className="text-vw-console-text-secondary mb-4">No identities yet. Create one by hand, or generate one if you have an endpoint configured.</p>
+                                    <p className="text-vw-console-text-secondary mb-4">{t('vaultNoIdentitiesYet')}</p>
                                     <div className="flex items-center justify-center gap-3">
                                         <button
                                             onClick={handleCreateIdentityManually}
@@ -556,7 +570,7 @@ export default function App() {
                                             onClick={handleGenerateIdentity}
                                             className="inline-flex items-center gap-2 px-4 py-2 border border-vw-console-border text-vw-console-text-secondary rounded-lg text-sm font-medium hover:text-white hover:bg-vw-console-raised"
                                         >
-                                            <Sparkles className="w-4 h-4" /> Generate
+                                            <Sparkles className="w-4 h-4" /> {t('actionGenerate')}
                                         </button>
                                     </div>
                                 </div>
@@ -616,10 +630,10 @@ export default function App() {
                             <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
                                 <div>
                                     <h1 className="text-2xl font-bold text-white capitalize">
-                                        {tab === 'all' ? 'All Items' : tab}
+                                        {tab === 'all' ? t('vaultAllItems') : tab}
                                     </h1>
                                     <p className="text-sm text-vw-console-text-secondary mt-1">
-                                        {filteredItems.length} {filteredItems.length === 1 ? 'item' : 'items'}
+                                        {t(filteredItems.length === 1 ? 'vaultOneItem' : 'vaultManyItems', { n: String(filteredItems.length) })}
                                     </p>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
@@ -629,26 +643,26 @@ export default function App() {
                                             type="search"
                                             value={search}
                                             onChange={(e) => setSearch(e.target.value)}
-                                            placeholder="Search…"
+                                            placeholder={t('actionSearch')}
                                             className="pl-9 pr-4 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold w-full sm:w-64"
                                         />
                                     </div>
                                     <select
                                         value={sortBy}
                                         onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-                                        aria-label="Sort items"
+                                        aria-label={t('vaultSortItems')}
                                         className="px-3 py-2 bg-vw-console-surface border border-vw-console-border rounded-lg text-sm text-white focus:outline-none focus:border-vw-gold"
                                     >
-                                        <option value="recent">Recently used</option>
-                                        <option value="name">Name A–Z</option>
-                                        <option value="created">Newest</option>
+                                        <option value="recent">{t('vaultSortRecent')}</option>
+                                        <option value="name">{t('vaultSortName')}</option>
+                                        <option value="created">{t('vaultSortNewest')}</option>
                                     </select>
                                     <button
                                         onClick={startNewItem}
                                         className="flex items-center gap-2 px-4 py-2 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431]"
                                     >
                                         <Plus className="w-4 h-4" />
-                                        New Item
+                                        {t('vaultNewItem')}
                                     </button>
                                 </div>
                             </div>
@@ -656,12 +670,12 @@ export default function App() {
                             {dataLoading ? (
                                 <div className="text-center py-20">
                                     <Loader2 className="w-8 h-8 text-vw-gold animate-spin mx-auto mb-3" />
-                                    <p className="text-sm text-vw-console-text-secondary">Decrypting vault…</p>
+                                    <p className="text-sm text-vw-console-text-secondary">{t('vaultDecrypting')}</p>
                                 </div>
                             ) : filteredItems.length === 0 ? (
                                 <div className="text-center py-20">
                                     <Shield className="w-12 h-12 text-vw-console-text-secondary/30 mx-auto mb-3" />
-                                    <p className="text-vw-console-text-secondary">No items yet. Create your first vault item.</p>
+                                    <p className="text-vw-console-text-secondary">{t('vaultNoItemsYet')}</p>
                                 </div>
                             ) : (
                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -726,7 +740,7 @@ const ConfirmDeleteButton = ({ onConfirm, className }: { onConfirm: () => void; 
     }, [armed]);
     return (
         <button onClick={() => (armed ? onConfirm() : setArmed(true))} className={`${className} ${armed ? 'font-semibold' : ''}`}>
-            <Trash2 className="w-4 h-4" /> {armed ? 'Click again to delete permanently' : 'Delete'}
+            <Trash2 className="w-4 h-4" /> {armed ? t('vaultDeleteConfirm') : t('actionDelete')}
         </button>
     );
 };
@@ -795,7 +809,7 @@ function ItemCard({ item, onClick }: { item: VaultItem; onClick: () => void }) {
                         </div>
                     ) : (
                         <button onClick={(e) => { e.stopPropagation(); setShowTotp(true); }} className="text-xs text-vw-gold hover:underline flex items-center gap-1">
-                            <Eye className="w-3.5 h-3.5" /> Show code
+                            <Eye className="w-3.5 h-3.5" /> {t('vaultShowCode')}
                         </button>
                     )}
                 </div>
@@ -872,20 +886,20 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: 
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onCancel}>
             <div className="vw-card p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
                 <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-                    <h2 className="text-lg font-semibold text-white">{item ? 'Edit' : 'New'} {ITEM_TYPE_CONFIG[itemType].label}</h2>
+                    <h2 className="text-lg font-semibold text-white">{t(item ? 'vaultEditItem' : 'vaultNewItemOfType', { type: ITEM_TYPE_CONFIG[itemType].label })}</h2>
                     <button onClick={onCancel} className="text-vw-console-text-secondary hover:text-white"><X className="w-5 h-5" /></button>
                 </div>
 
                 <div className="space-y-4">
                     <div>
-                        <label className={labelClass}>Label</label>
+                        <label className={labelClass}>{t('fieldLabel')}</label>
                         <input className={inputClass} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={getDefaultLabel()} />
                     </div>
 
                     {itemType === 'login' && (
                         <>
                             <div>
-                                <label className={labelClass}>URL</label>
+                                <label className={labelClass}>{t('fieldUrl')}</label>
                                 <input
                                     className={inputClass}
                                     value={loginData.url}
@@ -895,7 +909,7 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: 
                                 />
                             </div>
                             <div>
-                                <label className={labelClass}>Email</label>
+                                <label className={labelClass}>{t('fieldEmail')}</label>
                                 <input
                                     className={inputClass}
                                     type="email"
@@ -906,7 +920,7 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: 
                             </div>
                             {showUsernameField ? (
                                 <div>
-                                    <label className={labelClass}>Username</label>
+                                    <label className={labelClass}>{t('fieldUsername')}</label>
                                     <input
                                         className={inputClass}
                                         value={loginData.username}
@@ -919,11 +933,11 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: 
                                     onClick={() => setShowUsernameField(true)}
                                     className="text-xs text-vw-gold hover:underline"
                                 >
-                                    + username
+                                    {t('addUsername')}
                                 </button>
                             )}
                             <div>
-                                <label className={labelClass}>Password</label>
+                                <label className={labelClass}>{t('fieldPassword')}</label>
                                 <div className="flex gap-2">
                                     <input className={inputClass} type={showPassword ? 'text' : 'password'} value={loginData.password} onChange={(e) => setLoginData({ ...loginData, password: e.target.value })} />
                                     <button onClick={() => setShowPassword(!showPassword)} className="px-3 bg-vw-console-surface border border-vw-console-border rounded-lg text-vw-console-text-secondary hover:text-white">
@@ -932,11 +946,11 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: 
                                 </div>
                             </div>
                             <div>
-                                <label className={labelClass}>TOTP Secret (optional)</label>
-                                <input className={inputClass} value={loginData.totpSecret ?? ''} onChange={(e) => setLoginData({ ...loginData, totpSecret: e.target.value })} placeholder="Base32 secret" />
+                                <label className={labelClass}>{t('fieldTotpSecret')}</label>
+                                <input className={inputClass} value={loginData.totpSecret ?? ''} onChange={(e) => setLoginData({ ...loginData, totpSecret: e.target.value })} placeholder={t('totpSecretPlaceholder')} />
                             </div>
                             <div>
-                                <label className={labelClass}>Notes</label>
+                                <label className={labelClass}>{t('fieldNotes')}</label>
                                 <textarea className={inputClass} rows={2} value={loginData.notes ?? ''} onChange={(e) => setLoginData({ ...loginData, notes: e.target.value })} />
                             </div>
                         </>
@@ -944,42 +958,42 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: 
 
                     {itemType === 'address' && (
                         <>
-                            <div><label className={labelClass}>Full Name</label><input className={inputClass} value={addressData.fullName} onChange={(e) => setAddressData({ ...addressData, fullName: e.target.value })} /></div>
-                            <div><label className={labelClass}>Street</label><input className={inputClass} value={addressData.street} onChange={(e) => setAddressData({ ...addressData, street: e.target.value })} /></div>
+                            <div><label className={labelClass}>{t('fieldFullName')}</label><input className={inputClass} value={addressData.fullName} onChange={(e) => setAddressData({ ...addressData, fullName: e.target.value })} /></div>
+                            <div><label className={labelClass}>{t('fieldStreet')}</label><input className={inputClass} value={addressData.street} onChange={(e) => setAddressData({ ...addressData, street: e.target.value })} /></div>
                             <div className="grid grid-cols-2 gap-3">
-                                <div><label className={labelClass}>City</label><input className={inputClass} value={addressData.city} onChange={(e) => setAddressData({ ...addressData, city: e.target.value })} /></div>
-                                <div><label className={labelClass}>State/Province</label><input className={inputClass} value={addressData.state} onChange={(e) => setAddressData({ ...addressData, state: e.target.value })} /></div>
+                                <div><label className={labelClass}>{t('fieldCity')}</label><input className={inputClass} value={addressData.city} onChange={(e) => setAddressData({ ...addressData, city: e.target.value })} /></div>
+                                <div><label className={labelClass}>{t('fieldStateProvince')}</label><input className={inputClass} value={addressData.state} onChange={(e) => setAddressData({ ...addressData, state: e.target.value })} /></div>
                             </div>
                             <div className="grid grid-cols-2 gap-3">
-                                <div><label className={labelClass}>ZIP/Postal Code</label><input className={inputClass} value={addressData.zipCode} onChange={(e) => setAddressData({ ...addressData, zipCode: e.target.value })} /></div>
-                                <div><label className={labelClass}>Country</label><input className={inputClass} value={addressData.country} onChange={(e) => setAddressData({ ...addressData, country: e.target.value })} /></div>
+                                <div><label className={labelClass}>{t('fieldZip')}</label><input className={inputClass} value={addressData.zipCode} onChange={(e) => setAddressData({ ...addressData, zipCode: e.target.value })} /></div>
+                                <div><label className={labelClass}>{t('fieldCountry')}</label><input className={inputClass} value={addressData.country} onChange={(e) => setAddressData({ ...addressData, country: e.target.value })} /></div>
                             </div>
-                            <div><label className={labelClass}>Phone (optional)</label><input className={inputClass} value={addressData.phone ?? ''} onChange={(e) => setAddressData({ ...addressData, phone: e.target.value })} /></div>
+                            <div><label className={labelClass}>{t('fieldPhoneOptional')}</label><input className={inputClass} value={addressData.phone ?? ''} onChange={(e) => setAddressData({ ...addressData, phone: e.target.value })} /></div>
                         </>
                     )}
 
                     {itemType === 'card' && (
                         <>
-                            <div><label className={labelClass}>Cardholder Name</label><input className={inputClass} value={cardData.holderName} onChange={(e) => setCardData({ ...cardData, holderName: e.target.value })} /></div>
-                            <div><label className={labelClass}>Card Number</label><input className={`${inputClass} font-mono`} value={cardData.cardNumber} onChange={(e) => setCardData({ ...cardData, cardNumber: e.target.value })} placeholder="0000 0000 0000 0000" /></div>
+                            <div><label className={labelClass}>{t('fieldCardholder')}</label><input className={inputClass} value={cardData.holderName} onChange={(e) => setCardData({ ...cardData, holderName: e.target.value })} /></div>
+                            <div><label className={labelClass}>{t('fieldCardNumber')}</label><input className={`${inputClass} font-mono`} value={cardData.cardNumber} onChange={(e) => setCardData({ ...cardData, cardNumber: e.target.value })} placeholder="0000 0000 0000 0000" /></div>
                             <div className="grid grid-cols-3 gap-3">
-                                <div><label className={labelClass}>Month</label><input className={inputClass} value={cardData.expiryMonth} onChange={(e) => setCardData({ ...cardData, expiryMonth: e.target.value })} placeholder="MM" /></div>
-                                <div><label className={labelClass}>Year</label><input className={inputClass} value={cardData.expiryYear} onChange={(e) => setCardData({ ...cardData, expiryYear: e.target.value })} placeholder="YY" /></div>
-                                <div><label className={labelClass}>CVV</label><input className={inputClass} type={showPassword ? 'text' : 'password'} value={cardData.cvv} onChange={(e) => setCardData({ ...cardData, cvv: e.target.value })} /></div>
+                                <div><label className={labelClass}>{t('fieldMonth')}</label><input className={inputClass} value={cardData.expiryMonth} onChange={(e) => setCardData({ ...cardData, expiryMonth: e.target.value })} placeholder="MM" /></div>
+                                <div><label className={labelClass}>{t('fieldYear')}</label><input className={inputClass} value={cardData.expiryYear} onChange={(e) => setCardData({ ...cardData, expiryYear: e.target.value })} placeholder="YY" /></div>
+                                <div><label className={labelClass}>{t('fieldCvv')}</label><input className={inputClass} type={showPassword ? 'text' : 'password'} value={cardData.cvv} onChange={(e) => setCardData({ ...cardData, cvv: e.target.value })} /></div>
                             </div>
-                            <div><label className={labelClass}>Notes</label><textarea className={inputClass} rows={2} value={cardData.notes ?? ''} onChange={(e) => setCardData({ ...cardData, notes: e.target.value })} /></div>
+                            <div><label className={labelClass}>{t('fieldNotes')}</label><textarea className={inputClass} rows={2} value={cardData.notes ?? ''} onChange={(e) => setCardData({ ...cardData, notes: e.target.value })} /></div>
                         </>
                     )}
 
                     {itemType === 'totp' && (
                         <>
-                            <div><label className={labelClass}>Label</label><input className={inputClass} value={totpData.label} onChange={(e) => setTotpData({ ...totpData, label: e.target.value })} /></div>
-                            <div><label className={labelClass}>Issuer (optional)</label><input className={inputClass} value={totpData.issuer ?? ''} onChange={(e) => setTotpData({ ...totpData, issuer: e.target.value })} /></div>
-                            <div><label className={labelClass}>Secret (Base32)</label><input className={`${inputClass} font-mono`} value={totpData.secret} onChange={(e) => setTotpData({ ...totpData, secret: e.target.value.toUpperCase() })} /></div>
+                            <div><label className={labelClass}>{t('fieldLabel')}</label><input className={inputClass} value={totpData.label} onChange={(e) => setTotpData({ ...totpData, label: e.target.value })} /></div>
+                            <div><label className={labelClass}>{t('fieldIssuerOptional')}</label><input className={inputClass} value={totpData.issuer ?? ''} onChange={(e) => setTotpData({ ...totpData, issuer: e.target.value })} /></div>
+                            <div><label className={labelClass}>{t('fieldSecretBase32')}</label><input className={`${inputClass} font-mono`} value={totpData.secret} onChange={(e) => setTotpData({ ...totpData, secret: e.target.value.toUpperCase() })} /></div>
                             <div className="grid grid-cols-3 gap-3">
-                                <div><label className={labelClass}>Digits</label><select className={inputClass} value={totpData.digits} onChange={(e) => setTotpData({ ...totpData, digits: parseInt(e.target.value) })}><option value={6}>6</option><option value={8}>8</option></select></div>
-                                <div><label className={labelClass}>Period</label><select className={inputClass} value={totpData.period} onChange={(e) => setTotpData({ ...totpData, period: parseInt(e.target.value) })}><option value={30}>30s</option><option value={60}>60s</option></select></div>
-                                <div><label className={labelClass}>Algorithm</label><select className={inputClass} value={totpData.algorithm} onChange={(e) => setTotpData({ ...totpData, algorithm: e.target.value as any })}><option value="SHA1">SHA1</option><option value="SHA256">SHA256</option><option value="SHA512">SHA512</option></select></div>
+                                <div><label className={labelClass}>{t('fieldDigits')}</label><select className={inputClass} value={totpData.digits} onChange={(e) => setTotpData({ ...totpData, digits: parseInt(e.target.value) })}><option value={6}>6</option><option value={8}>8</option></select></div>
+                                <div><label className={labelClass}>{t('fieldPeriod')}</label><select className={inputClass} value={totpData.period} onChange={(e) => setTotpData({ ...totpData, period: parseInt(e.target.value) })}><option value={30}>30s</option><option value={60}>60s</option></select></div>
+                                <div><label className={labelClass}>{t('fieldAlgorithm')}</label><select className={inputClass} value={totpData.algorithm} onChange={(e) => setTotpData({ ...totpData, algorithm: e.target.value as any })}><option value="SHA1">SHA1</option><option value="SHA256">SHA256</option><option value="SHA512">SHA512</option></select></div>
                             </div>
                         </>
                     )}
@@ -997,23 +1011,23 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: 
                                 <Fingerprint className="w-4 h-4 text-vw-violet flex-shrink-0 mt-px" />
                                 <span>
                                     {passkeyData.createdByAuthenticator
-                                        ? `Created by VaultWares${passkeyData.createdAt ? ' on ' + new Date(passkeyData.createdAt).toLocaleDateString() : ''}.`
-                                        : 'Imported passkey.'}
-                                    {' '}Key material is read-only. To replace it, delete this passkey and register a new one on the site.
+                                        ? t('vaultPasskeyCreatedBy') + (passkeyData.createdAt ? t('vaultPasskeyCreatedOn', { date: new Date(passkeyData.createdAt).toLocaleDateString() }) : '.')
+                                        : t('vaultPasskeyImported')}
+                                    {' '}{t('vaultPasskeyReadOnly')}
                                 </span>
                             </div>
-                            <div><label className={labelClass}>Relying Party</label><input className={inputClass} value={passkeyData.rpName || passkeyData.rpId} readOnly /></div>
-                            <div><label className={labelClass}>Relying Party ID</label><input className={`${inputClass} font-mono`} value={passkeyData.rpId} readOnly /></div>
-                            <div><label className={labelClass}>Account</label><input className={inputClass} value={passkeyData.userDisplayName || passkeyData.userName || ''} readOnly /></div>
-                            <div><label className={labelClass}>Credential ID</label><input className={`${inputClass} font-mono`} value={passkeyData.credentialId} readOnly /></div>
-                            <div><label className={labelClass}>Algorithm</label><input className={inputClass} value={passkeyData.algorithm === -7 ? 'ES256 (ECDSA P-256)' : String(passkeyData.algorithm ?? '')} readOnly /></div>
-                            <div><label className={labelClass}>Notes</label><textarea className={inputClass} rows={2} value={passkeyData.notes ?? ''} onChange={(e) => setPasskeyData({ ...passkeyData, notes: e.target.value })} /></div>
+                            <div><label className={labelClass}>{t('fieldRelyingParty')}</label><input className={inputClass} value={passkeyData.rpName || passkeyData.rpId} readOnly /></div>
+                            <div><label className={labelClass}>{t('fieldRelyingPartyId')}</label><input className={`${inputClass} font-mono`} value={passkeyData.rpId} readOnly /></div>
+                            <div><label className={labelClass}>{t('passkeyAccountLabel')}</label><input className={inputClass} value={passkeyData.userDisplayName || passkeyData.userName || ''} readOnly /></div>
+                            <div><label className={labelClass}>{t('fieldCredentialId')}</label><input className={`${inputClass} font-mono`} value={passkeyData.credentialId} readOnly /></div>
+                            <div><label className={labelClass}>{t('fieldAlgorithm')}</label><input className={inputClass} value={passkeyData.algorithm === -7 ? 'ES256 (ECDSA P-256)' : String(passkeyData.algorithm ?? '')} readOnly /></div>
+                            <div><label className={labelClass}>{t('fieldNotes')}</label><textarea className={inputClass} rows={2} value={passkeyData.notes ?? ''} onChange={(e) => setPasskeyData({ ...passkeyData, notes: e.target.value })} /></div>
                         </>
                     )}
 
                     <div className="flex items-center gap-2">
                         <button onClick={() => setFavorite(!favorite)} className={`flex items-center gap-1.5 text-xs ${favorite ? 'text-vw-gold' : 'text-vw-console-text-secondary'}`}>
-                            <Star className={`w-4 h-4 ${favorite ? 'fill-vw-gold' : ''}`} /> Favorite
+                            <Star className={`w-4 h-4 ${favorite ? 'fill-vw-gold' : ''}`} /> {t('fieldFavorite')}
                         </button>
                     </div>
                 </div>
@@ -1025,8 +1039,8 @@ function ItemEditor({ item, itemType, onSave, onCancel, onDelete, prefillUrl }: 
                         )}
                     </div>
                     <div className="flex items-center gap-2">
-                        <button onClick={onCancel} className="px-4 py-2 text-sm text-vw-console-text-secondary hover:text-white">Cancel</button>
-                        <button onClick={handleSave} className="px-4 py-2 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431]">Save</button>
+                        <button onClick={onCancel} className="px-4 py-2 text-sm text-vw-console-text-secondary hover:text-white">{t('actionCancel')}</button>
+                        <button onClick={handleSave} className="px-4 py-2 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431]">{t('actionSave')}</button>
                     </div>
                 </div>
             </div>
@@ -1067,13 +1081,13 @@ function PasswordGeneratorPanel({ settings }: { settings: VaultSettings | null }
 
     return (
         <div className="max-w-xl">
-            <h1 className="text-2xl font-bold text-white mb-2">Password Generator</h1>
-            <p className="text-sm text-vw-console-text-secondary mb-6">Generate cryptographically secure passwords</p>
+            <h1 className="text-2xl font-bold text-white mb-2">{t('vaultGeneratorTitle')}</h1>
+            <p className="text-sm text-vw-console-text-secondary mb-6">{t('vaultGeneratorSubtitle')}</p>
 
             <div className="vw-card p-6 space-y-5">
                 {/* Preset selector */}
                 <div>
-                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-2">Preset</label>
+                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-2">{t('fieldPreset')}</label>
                     <div className="flex gap-2">
                         {PRESETS.map(preset => (
                             <button
@@ -1124,16 +1138,16 @@ function PasswordGeneratorPanel({ settings }: { settings: VaultSettings | null }
                     <>
                         <div>
                             <div className="flex items-center justify-between mb-2">
-                                <label className="text-sm text-vw-console-text-secondary">Length: {pwOpts.length}</label>
+                                <label className="text-sm text-vw-console-text-secondary">{t('genLength', { n: String(pwOpts.length) })}</label>
                             </div>
                             <input type="range" min="8" max="64" value={pwOpts.length} onChange={(e) => setPwOpts({ ...pwOpts, length: parseInt(e.target.value) })} className="w-full accent-vw-gold" />
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                             {[
-                                { label: 'Uppercase (A-Z)', key: 'uppercase' as const },
-                                { label: 'Lowercase (a-z)', key: 'lowercase' as const },
-                                { label: 'Numbers (0-9)', key: 'numbers' as const },
-                                { label: 'Symbols (!@#)', key: 'symbols' as const },
+                                { label: t('genUppercase'), key: 'uppercase' as const },
+                                { label: t('genLowercase'), key: 'lowercase' as const },
+                                { label: t('genNumbers'), key: 'numbers' as const },
+                                { label: t('genSymbols'), key: 'symbols' as const },
                             ].map(({ label, key }) => (
                                 <label key={label} className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
                                     <input type="checkbox" checked={pwOpts[key]} onChange={(e) => setPwOpts({ ...pwOpts, [key]: e.target.checked })} className="accent-vw-gold" />
@@ -1144,7 +1158,7 @@ function PasswordGeneratorPanel({ settings }: { settings: VaultSettings | null }
                         {pwOpts.symbols && (
                             <label className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
                                 <input type="checkbox" checked={pwOpts.standardSymbolsOnly} onChange={(e) => setPwOpts({ ...pwOpts, standardSymbolsOnly: e.target.checked })} className="accent-vw-gold" />
-                                Standard symbols only (!@#$%^&*()-_=+)
+                                {t('genStandardOnly')}
                             </label>
                         )}
                     </>
@@ -1154,30 +1168,30 @@ function PasswordGeneratorPanel({ settings }: { settings: VaultSettings | null }
                 {activePreset.type === 'passphrase' && (
                     <>
                         <div>
-                            <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Word count: {ppOpts.wordCount}</label>
+                            <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">{t('genWordCount', { n: String(ppOpts.wordCount) })}</label>
                             <input type="range" min="2" max="8" value={ppOpts.wordCount} onChange={(e) => setPpOpts({ ...ppOpts, wordCount: parseInt(e.target.value) })} className="w-full accent-vw-gold" />
                         </div>
                         <div>
-                            <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Delimiter</label>
+                            <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">{t('genDelimiter')}</label>
                             <input className={inputClass} value={ppOpts.delimiter} onChange={(e) => setPpOpts({ ...ppOpts, delimiter: e.target.value })} maxLength={3} />
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                             <div>
-                                <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Suffix type</label>
+                                <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">{t('genSuffixType')}</label>
                                 <select className={inputClass} value={ppOpts.suffixType} onChange={(e) => setPpOpts({ ...ppOpts, suffixType: e.target.value as any })}>
-                                    <option value="none">None</option>
-                                    <option value="numeric">Numeric</option>
-                                    <option value="alphanumeric">Alphanumeric</option>
+                                    <option value="none">{t('genSuffixNone')}</option>
+                                    <option value="numeric">{t('genSuffixNumeric')}</option>
+                                    <option value="alphanumeric">{t('genSuffixAlphanumeric')}</option>
                                 </select>
                             </div>
                             <div>
-                                <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Suffix length: {ppOpts.suffixLength}</label>
+                                <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">{t('genSuffixLength', { n: String(ppOpts.suffixLength) })}</label>
                                 <input type="range" min="0" max="8" value={ppOpts.suffixLength} onChange={(e) => setPpOpts({ ...ppOpts, suffixLength: parseInt(e.target.value) })} className="w-full accent-vw-gold" />
                             </div>
                         </div>
                         <label className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
                             <input type="checkbox" checked={ppOpts.capitalize} onChange={(e) => setPpOpts({ ...ppOpts, capitalize: e.target.checked })} className="accent-vw-gold" />
-                            Capitalize first letter of each word
+                            {t('genCapitalize')}
                         </label>
                     </>
                 )}
@@ -1185,12 +1199,12 @@ function PasswordGeneratorPanel({ settings }: { settings: VaultSettings | null }
                 {/* Token type info */}
                 {activePreset.type === 'token' && (
                     <p className="text-xs text-vw-console-text-secondary">
-                        Generates a JWT-like token with three base64url segments separated by dots. No configuration needed.
+                        {t('genTokenInfo')}
                     </p>
                 )}
 
                 <button onClick={generate} className="w-full py-2.5 bg-vw-gold text-vw-console-bg rounded-lg font-medium hover:bg-[#C69431] flex items-center justify-center gap-2">
-                    <RefreshCw className="w-4 h-4" /> Generate
+                    <RefreshCw className="w-4 h-4" /> {t('actionGenerate')}
                 </button>
             </div>
         </div>
@@ -1202,10 +1216,10 @@ function ItemTypeSelector({ onSelect, onCancel }: {
     onCancel: () => void;
 }) {
     const types: { type: ItemType; label: string; icon: React.ReactNode; desc: string }[] = [
-        { type: 'login', label: 'Login', icon: <Key className="w-6 h-6" />, desc: 'Username, password, URL' },
-        { type: 'address', label: 'Address', icon: <MapPin className="w-6 h-6" />, desc: 'Full postal address' },
-        { type: 'card', label: 'Card', icon: <CreditCard className="w-6 h-6" />, desc: 'Credit/debit card details' },
-        { type: 'totp', label: 'TOTP', icon: <Clock className="w-6 h-6" />, desc: 'Authenticator secret' },
+        { type: 'login', label: t('typeLogin'), icon: <Key className="w-6 h-6" />, desc: t('typeLoginDesc') },
+        { type: 'address', label: t('typeAddress'), icon: <MapPin className="w-6 h-6" />, desc: t('typeAddressDesc') },
+        { type: 'card', label: t('typeCard'), icon: <CreditCard className="w-6 h-6" />, desc: t('typeCardDesc') },
+        { type: 'totp', label: t('typeTotp'), icon: <Clock className="w-6 h-6" />, desc: t('typeTotpDesc') },
         // Passkeys are deliberately absent: they are created by the
         // authenticator during a real ceremony on the site, and a hand-typed
         // credential cannot produce a signature any relying party accepts.
@@ -1215,7 +1229,7 @@ function ItemTypeSelector({ onSelect, onCancel }: {
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={onCancel}>
             <div className="vw-card p-6 max-w-md w-full" onClick={(e) => e.stopPropagation()}>
                 <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-                    <h2 className="text-lg font-semibold text-white">New Item Type</h2>
+                    <h2 className="text-lg font-semibold text-white">{t('vaultNewItemType')}</h2>
                     <button onClick={onCancel} className="text-vw-console-text-secondary hover:text-white"><X className="w-5 h-5" /></button>
                 </div>
                 <div className="space-y-2">
@@ -1255,57 +1269,78 @@ function SettingsPanel({ settings, onSave }: { settings: VaultSettings | null; o
 
     return (
         <div className="max-w-xl">
-            <h1 className="text-2xl font-bold text-white mb-6">Settings</h1>
+            <h1 className="text-2xl font-bold text-white mb-6">{t('vaultNavSettings')}</h1>
             <div className="vw-card p-6 space-y-5">
                 <div>
-                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Auto-lock (minutes)</label>
+                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">{t('fieldAutoLock')}</label>
                     <input type="number" min="0" max="120" className={inputClass} value={local.autoLockMinutes} onChange={(e) => setLocal({ ...local, autoLockMinutes: parseInt(e.target.value) || 0 })} />
                 </div>
                 <div>
-                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Default password length</label>
+                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">{t('fieldDefaultPwLength')}</label>
                     <input type="number" min="8" max="64" className={inputClass} value={local.defaultPasswordLength} onChange={(e) => setLocal({ ...local, defaultPasswordLength: parseInt(e.target.value) || 20 })} />
                 </div>
                 <div>
-                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Default complexity</label>
+                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">{t('fieldDefaultComplexity')}</label>
                     <select className={inputClass} value={local.defaultPasswordComplexity} onChange={(e) => setLocal({ ...local, defaultPasswordComplexity: e.target.value as any })}>
-                        <option value="medium">Medium</option>
-                        <option value="high">High</option>
-                        <option value="maximum">Maximum</option>
+                        <option value="medium">{t('complexityMedium')}</option>
+                        <option value="high">{t('complexityHigh')}</option>
+                        <option value="maximum">{t('complexityMaximum')}</option>
                     </select>
                 </div>
                 <div>
-                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">Default generator preset</label>
+                    <label className="block text-xs font-medium text-vw-console-text-secondary mb-1.5">{t('fieldDefaultPreset')}</label>
                     <select className={inputClass} value={local.defaultGeneratorPreset} onChange={(e) => setLocal({ ...local, defaultGeneratorPreset: e.target.value })}>
                         {PRESETS.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                     </select>
                 </div>
                 <label className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
                     <input type="checkbox" checked={local.autoFillEnabled} onChange={(e) => setLocal({ ...local, autoFillEnabled: e.target.checked })} className="accent-vw-gold" />
-                    Auto-fill forms
+                    {t('settingAutoFill')}
                 </label>
                 <label className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
                     <input type="checkbox" checked={local.autoDetectEnabled} onChange={(e) => setLocal({ ...local, autoDetectEnabled: e.target.checked })} className="accent-vw-gold" />
-                    Auto-detect login/signup forms
+                    {t('settingAutoDetect')}
                 </label>
                 <label className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
                     <input type="checkbox" checked={local.savePromptEnabled} onChange={(e) => setLocal({ ...local, savePromptEnabled: e.target.checked })} className="accent-vw-gold" />
-                    Offer to save logins after sign-in
+                    {t('settingSavePrompt')}
                 </label>
                 <div>
                     <label className="flex items-center gap-2 text-sm text-vw-console-text-secondary cursor-pointer">
                         <input type="checkbox" checked={local.passkeysEnabled} onChange={(e) => setLocal({ ...local, passkeysEnabled: e.target.checked })} className="accent-vw-gold" />
-                        Handle passkeys in VaultWares
+                        {t('settingPasskeys')}
                     </label>
                     <p className="text-[11px] text-vw-console-text-secondary/60 mt-1 ml-6">
-                        Off hands every passkey prompt to your browser or security key instead.
+                        {t('settingPasskeysHint')}
                     </p>
                 </div>
                 <button onClick={handleSave} className="w-full py-2.5 bg-vw-gold text-vw-console-bg rounded-lg font-medium hover:bg-[#C69431] flex items-center justify-center gap-2">
-                    {saved ? <><Check className="w-4 h-4" /> Saved</> : 'Save Settings'}
+                    {saved ? <><Check className="w-4 h-4" /> {t('actionSaved')}</> : t('vaultSaveSettings')}
                 </button>
             </div>
 
+            <KitRestoreCard />
             <ResetDevicePanel />
+        </div>
+    );
+}
+
+/**
+ * The settings-surface mount for the kit restore. A successful restore rewrote
+ * the keychain out from under this component tree, so the page reloads and the
+ * app re-initializes against the restored keys — the same full-reset approach
+ * ResetDevicePanel takes with onboarding.
+ */
+function KitRestoreCard() {
+    return (
+        <div className="vw-card p-6 mt-6">
+            <h2 className="text-sm font-semibold text-white">{t('kitRestoreTitle')}</h2>
+            <p className="text-[13px] text-vw-console-text-secondary mt-1.5">
+                {t('kitRestoreBody')}
+            </p>
+            <div className="mt-4">
+                <KitRestorePanel onRestored={() => window.location.reload()} />
+            </div>
         </div>
     );
 }
@@ -1333,7 +1368,7 @@ function ResetDevicePanel() {
         setError(null);
         const resp = await chrome.runtime.sendMessage({ type: 'RESET_DEVICE', payload: { confirm: 'RESET' } });
         if (!resp?.success) {
-            setError(resp?.error ?? 'Reset failed.');
+            setError(resp?.error ?? t('vaultResetFailed'));
             setBusy(false);
             return;
         }
@@ -1345,15 +1380,12 @@ function ResetDevicePanel() {
 
     return (
         <div className="vw-card p-6 mt-6 border-red-900/40">
-            <h2 className="text-sm font-semibold text-red-400">Reset this device</h2>
+            <h2 className="text-sm font-semibold text-red-400">{t('vaultResetTitle')}</h2>
             <p className="text-[13px] text-vw-console-text-secondary mt-1.5">
-                Destroys the account keys and every item stored here, then starts onboarding
-                fresh with a new keypair. This is how you rotate keys after a recovery kit
-                leaks — items are sealed to the old key, so there is no way to keep them.
+                {t('vaultResetBody')}
             </p>
             <p className="text-[11px] text-vw-console-text-secondary/60 mt-1.5">
-                Items already synced to vault-warden are left alone and will be unreadable
-                afterwards. Delete them there first if you want them gone.
+                {t('vaultResetServerNote')}
             </p>
 
             {!open ? (
@@ -1361,12 +1393,12 @@ function ResetDevicePanel() {
                     onClick={() => setOpen(true)}
                     className="mt-4 px-4 py-2 text-sm border border-red-900/60 text-red-400 rounded-lg hover:bg-red-950/30"
                 >
-                    Reset this device
+                    {t('vaultResetTitle')}
                 </button>
             ) : (
                 <div className="mt-4 space-y-2">
                     <label className="block text-xs text-vw-console-text-secondary">
-                        Type <span className="font-mono text-red-400">RESET</span> to confirm.
+                        {t('vaultResetTypeConfirm', { word: 'RESET' })}
                     </label>
                     <input
                         value={typed}
@@ -1382,13 +1414,13 @@ function ResetDevicePanel() {
                             onClick={reset}
                             className="px-4 py-2 text-sm bg-red-900/60 text-red-100 rounded-lg disabled:opacity-40 hover:bg-red-900"
                         >
-                            {busy ? 'Resetting…' : 'Erase and start over'}
+                            {busy ? t('vaultResetting') : t('vaultEraseAndStartOver')}
                         </button>
                         <button
                             onClick={() => { setOpen(false); setTyped(''); setError(null); }}
                             className="px-4 py-2 text-sm text-vw-console-text-secondary hover:text-white"
                         >
-                            Cancel
+                            {t('actionCancel')}
                         </button>
                     </div>
                 </div>
@@ -1412,13 +1444,13 @@ function DevicesPanel() {
 
     return (
         <div className="max-w-xl">
-            <h1 className="text-2xl font-bold text-white mb-6">Devices</h1>
+            <h1 className="text-2xl font-bold text-white mb-6">{t('vaultNavDevices')}</h1>
             {loading ? (
-                <div className="flex items-center gap-2 text-vw-console-text-secondary"><Loader2 className="w-4 h-4 animate-spin" /> Loading devices…</div>
+                <div className="flex items-center gap-2 text-vw-console-text-secondary"><Loader2 className="w-4 h-4 animate-spin" /> {t('vaultLoadingDevices')}</div>
             ) : devices.length === 0 ? (
                 <div className="vw-card p-6 text-center">
                     <Monitor className="w-10 h-10 text-vw-console-text-secondary/30 mx-auto mb-2" />
-                    <p className="text-sm text-vw-console-text-secondary">No devices registered yet.</p>
+                    <p className="text-sm text-vw-console-text-secondary">{t('vaultNoDevices')}</p>
                 </div>
             ) : (
                 <div className="space-y-3">
@@ -1431,7 +1463,7 @@ function DevicesPanel() {
                             </div>
                             <div className="flex items-center gap-2">
                                 {dev.deviceRole === 'master' && (
-                                    <span className="px-2 py-0.5 text-xs bg-vw-gold/20 text-vw-gold rounded-full font-medium">Master</span>
+                                    <span className="px-2 py-0.5 text-xs bg-vw-gold/20 text-vw-gold rounded-full font-medium">{t('deviceMaster')}</span>
                                 )}
                                 <span className={`w-2 h-2 rounded-full vw-led ${dev.approvalState === 'approved' ? 'bg-vw-signal-online' : dev.approvalState === 'pending' ? 'bg-vw-signal-warning' : 'bg-vw-signal-alert'}`} />
                             </div>
@@ -1445,12 +1477,12 @@ function DevicesPanel() {
 
 function relativeTime(iso: string): string {
     const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-    if (seconds < 60) return 'just now';
+    if (seconds < 60) return t('vaultJustNow');
     const minutes = Math.round(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
+    if (minutes < 60) return t('vaultMinutesAgo', { n: String(minutes) });
     const hours = Math.round(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    return `${Math.round(hours / 24)}d ago`;
+    if (hours < 24) return t('vaultHoursAgo', { n: String(hours) });
+    return t('vaultDaysAgo', { n: String(Math.round(hours / 24)) });
 }
 
 function SyncStatusLine({ status, syncing }: { status: SyncStatus | null; syncing: boolean }) {
@@ -1458,22 +1490,22 @@ function SyncStatusLine({ status, syncing }: { status: SyncStatus | null; syncin
     let tone = 'text-[#161320]/45';
 
     if (syncing) {
-        text = 'Syncing…';
+        text = t('vaultSyncing');
     } else if (status?.state === 'error') {
-        text = status.error ?? 'Sync failed';
+        text = status.error ?? t('vaultSyncFailed');
         tone = 'text-vw-signal-alert';
     } else if (status?.lastSuccessAt) {
-        text = `Synced ${relativeTime(status.lastSuccessAt)}`;
+        text = t('vaultSyncedAt', { time: relativeTime(status.lastSuccessAt) });
     } else {
-        text = 'Not synced yet';
+        text = t('vaultNotSyncedYet');
     }
 
     return (
         <div className="px-3 pb-1">
             <p className={`text-[10px] ${tone}`}>{text}</p>
-            {/* Sync only covers vault items today — identities live on this
-                device alone. Saying so beats letting the user assume otherwise. */}
-            <p className="text-[10px] text-[#161320]/35">Items only — identities stay local</p>
+            {/* Identities ride the same sync batch as items now; the old
+                "identities stay local" caveat is gone. */}
+            <p className="text-[10px] text-[#161320]/35">{t('vaultItemsAndIdentities')}</p>
         </div>
     );
 }
@@ -1498,7 +1530,7 @@ function IdentityCard({ identity, itemCount, onClick }: { identity: Identity; it
                     <p className="text-[10px] text-vw-console-text-secondary/60 mt-1 line-clamp-2">{identity.bio}</p>
                     <div className="flex items-center gap-2 mt-2">
                         <span className="text-[10px] px-2 py-0.5 bg-vw-console-surface rounded-full text-vw-console-text-secondary">
-                            {itemCount} {itemCount === 1 ? 'item' : 'items'}
+                            {t(itemCount === 1 ? 'vaultOneItem' : 'vaultManyItems', { n: String(itemCount) })}
                         </span>
                     </div>
                 </div>
@@ -1566,7 +1598,7 @@ function IdentityEditorModal({ mode, data, onSave, onCancel }: {
                 <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className={labelClass}>Full Name</label>
+                            <label className={labelClass}>{t('fieldFullName')}</label>
                             <input
                                 className={inputClass}
                                 value={local.fullName}
@@ -1576,57 +1608,57 @@ function IdentityEditorModal({ mode, data, onSave, onCancel }: {
                             />
                         </div>
                         <div>
-                            <label className={labelClass}>Gender</label>
+                            <label className={labelClass}>{t('fieldGender')}</label>
                             <select className={inputClass} value={local.gender} onChange={(e) => setLocal({ ...local, gender: e.target.value as any })}>
-                                <option value="male">Male</option>
-                                <option value="female">Female</option>
-                                <option value="non-binary">Non-binary</option>
-                                <option value="other">Other</option>
+                                <option value="male">{t('genderMale')}</option>
+                                <option value="female">{t('genderFemale')}</option>
+                                <option value="non-binary">{t('genderNonBinary')}</option>
+                                <option value="other">{t('genderOther')}</option>
                             </select>
                         </div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className={labelClass}>Birth Date</label>
+                            <label className={labelClass}>{t('fieldBirthDate')}</label>
                             <input type="date" className={inputClass} value={local.birthDate} onChange={(e) => setLocal({ ...local, birthDate: e.target.value })} />
                         </div>
                         <div>
-                            <label className={labelClass}>Nationality</label>
+                            <label className={labelClass}>{t('fieldNationality')}</label>
                             <input className={inputClass} placeholder="Canada" value={local.nationality} onChange={(e) => setLocal({ ...local, nationality: e.target.value })} />
                         </div>
                     </div>
                     <div>
-                        <label className={labelClass}>Bio</label>
+                        <label className={labelClass}>{t('fieldBio')}</label>
                         <textarea className={inputClass} rows={2} value={local.bio} onChange={(e) => setLocal({ ...local, bio: e.target.value })} />
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                         <div>
-                            <label className={labelClass}>Email</label>
+                            <label className={labelClass}>{t('fieldEmail')}</label>
                             <input className={inputClass} value={local.email} onChange={(e) => setLocal({ ...local, email: e.target.value })} />
                         </div>
                         <div>
-                            <label className={labelClass}>Phone</label>
+                            <label className={labelClass}>{t('fieldPhone')}</label>
                             <input className={inputClass} value={local.phone} onChange={(e) => setLocal({ ...local, phone: e.target.value })} />
                         </div>
                     </div>
                     <div className="border-t border-vw-console-border pt-4">
-                        <p className="text-xs font-medium text-vw-console-text-secondary mb-3">Address</p>
+                        <p className="text-xs font-medium text-vw-console-text-secondary mb-3">{t('sectionAddress')}</p>
                         <div className="space-y-3">
-                            <input className={inputClass} placeholder="Street" value={local.address.street} onChange={(e) => setLocal({ ...local, address: { ...local.address, street: e.target.value } })} />
+                            <input className={inputClass} placeholder={t('fieldStreet')} value={local.address.street} onChange={(e) => setLocal({ ...local, address: { ...local.address, street: e.target.value } })} />
                             <div className="grid grid-cols-2 gap-3">
-                                <input className={inputClass} placeholder="City" value={local.address.city} onChange={(e) => setLocal({ ...local, address: { ...local.address, city: e.target.value } })} />
-                                <input className={inputClass} placeholder="State" value={local.address.state} onChange={(e) => setLocal({ ...local, address: { ...local.address, state: e.target.value } })} />
+                                <input className={inputClass} placeholder={t('fieldCity')} value={local.address.city} onChange={(e) => setLocal({ ...local, address: { ...local.address, city: e.target.value } })} />
+                                <input className={inputClass} placeholder={t('fieldStateProvince')} value={local.address.state} onChange={(e) => setLocal({ ...local, address: { ...local.address, state: e.target.value } })} />
                             </div>
                             <div className="grid grid-cols-2 gap-3">
-                                <input className={inputClass} placeholder="ZIP" value={local.address.zipCode} onChange={(e) => setLocal({ ...local, address: { ...local.address, zipCode: e.target.value } })} />
-                                <input className={inputClass} placeholder="Country" value={local.address.country} onChange={(e) => setLocal({ ...local, address: { ...local.address, country: e.target.value } })} />
+                                <input className={inputClass} placeholder={t('fieldZip')} value={local.address.zipCode} onChange={(e) => setLocal({ ...local, address: { ...local.address, zipCode: e.target.value } })} />
+                                <input className={inputClass} placeholder={t('fieldCountry')} value={local.address.country} onChange={(e) => setLocal({ ...local, address: { ...local.address, country: e.target.value } })} />
                             </div>
                         </div>
                     </div>
                 </div>
 
                 <div className="flex items-center justify-end gap-3 mt-6">
-                    <button onClick={onCancel} className="px-4 py-2 text-sm text-vw-console-text-secondary hover:text-white">Discard</button>
+                    <button onClick={onCancel} className="px-4 py-2 text-sm text-vw-console-text-secondary hover:text-white">{t('actionDiscard')}</button>
                     <button onClick={submit} className="px-4 py-2 bg-vw-gold text-vw-console-bg rounded-lg text-sm font-medium hover:bg-[#C69431]">
                         {t('identitySave')}
                     </button>
@@ -1655,7 +1687,7 @@ function IdentityDetailView({ identity, items, allItems, onBack, onDelete, onEdi
         <div>
             <div className="flex items-center gap-3 mb-6">
                 <button onClick={onBack} className="text-vw-console-text-secondary hover:text-white flex items-center gap-1 text-sm">
-                    <ChevronRight className="w-4 h-4 rotate-180" /> Back
+                    <ChevronRight className="w-4 h-4 rotate-180" /> {t('actionBack')}
                 </button>
             </div>
 
@@ -1674,7 +1706,7 @@ function IdentityDetailView({ identity, items, allItems, onBack, onDelete, onEdi
                 </div>
                 <div className="flex items-center gap-4">
                     <button onClick={onEdit} className="text-vw-console-text-secondary hover:text-white text-sm flex items-center gap-1">
-                        <Settings className="w-4 h-4" /> Edit
+                        <Settings className="w-4 h-4" /> {t('actionEdit')}
                     </button>
                     <ConfirmDeleteButton onConfirm={onDelete} className="text-vw-signal-alert/60 hover:text-vw-signal-alert text-sm flex items-center gap-1" />
                 </div>
@@ -1682,18 +1714,18 @@ function IdentityDetailView({ identity, items, allItems, onBack, onDelete, onEdi
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
                 <div className="vw-card p-4">
-                    <p className="text-xs font-medium text-vw-console-text-secondary uppercase tracking-wider mb-2">Contact</p>
+                    <p className="text-xs font-medium text-vw-console-text-secondary uppercase tracking-wider mb-2">{t('vaultContact')}</p>
                     <div className="space-y-1.5">
                         <div className="flex items-center gap-2 text-sm text-white">
-                            <span className="text-vw-console-text-secondary text-xs w-16">Email</span> {identity.email}
+                            <span className="text-vw-console-text-secondary text-xs w-16">{t('fieldEmail')}</span> {identity.email}
                         </div>
                         <div className="flex items-center gap-2 text-sm text-white">
-                            <span className="text-vw-console-text-secondary text-xs w-16">Phone</span> {identity.phone}
+                            <span className="text-vw-console-text-secondary text-xs w-16">{t('fieldPhone')}</span> {identity.phone}
                         </div>
                     </div>
                 </div>
                 <div className="vw-card p-4">
-                    <p className="text-xs font-medium text-vw-console-text-secondary uppercase tracking-wider mb-2">Address</p>
+                    <p className="text-xs font-medium text-vw-console-text-secondary uppercase tracking-wider mb-2">{t('sectionAddress')}</p>
                     <div className="text-sm text-white space-y-0.5">
                         <p>{identity.address.street}</p>
                         <p>{identity.address.city}, {identity.address.state} {identity.address.zipCode}</p>
@@ -1703,13 +1735,13 @@ function IdentityDetailView({ identity, items, allItems, onBack, onDelete, onEdi
             </div>
 
             <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-white">Linked Items ({items.length})</h2>
+                <h2 className="text-lg font-semibold text-white">{t('vaultLinkedItems', { n: String(items.length) })}</h2>
                 <div className="flex items-center gap-2">
                     <button onClick={() => setShowAssignList(!showAssignList)} className="text-xs text-vw-gold hover:underline">
-                        {showAssignList ? 'Cancel' : 'Assign existing item'}
+                        {showAssignList ? t('actionCancel') : t('vaultAssignExisting')}
                     </button>
                     <button onClick={onCreateItem} className="flex items-center gap-1 text-xs text-vw-gold hover:underline">
-                        <Plus className="w-3 h-3" /> New item
+                        <Plus className="w-3 h-3" /> {t('vaultNewItem')}
                     </button>
                 </div>
             </div>
@@ -1729,7 +1761,7 @@ function IdentityDetailView({ identity, items, allItems, onBack, onDelete, onEdi
             )}
 
             {items.length === 0 ? (
-                <p className="text-sm text-vw-console-text-secondary py-8 text-center">No items linked to this identity yet.</p>
+                <p className="text-sm text-vw-console-text-secondary py-8 text-center">{t('vaultNoLinkedItems')}</p>
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                     {items.map((item) => (
@@ -1744,7 +1776,7 @@ function IdentityDetailView({ identity, items, allItems, onBack, onDelete, onEdi
                                         <div className="text-xs text-vw-console-text-secondary capitalize">{item.itemType}</div>
                                     </div>
                                 </div>
-                                <button onClick={() => onUnassignItem(item.id)} className="text-vw-console-text-secondary hover:text-vw-signal-alert opacity-0 group-hover:opacity-100 transition-opacity text-xs" title="Unassign">
+                                <button onClick={() => onUnassignItem(item.id)} className="text-vw-console-text-secondary hover:text-vw-signal-alert opacity-0 group-hover:opacity-100 transition-opacity text-xs" title={t('vaultUnassign')}>
                                     <X className="w-3.5 h-3.5" />
                                 </button>
                             </div>

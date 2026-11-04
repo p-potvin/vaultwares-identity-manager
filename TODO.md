@@ -19,17 +19,13 @@ endpoints enrollment depends on.
 
 Known gaps from the v2.1.0 work:
 
-- New user-facing strings go through `src/i18n/strings.ts` (EN + QC). The UI
-  that predates it — vault, popup, onboarding — is still English-only and needs
-  a retrofit pass.
 - The suggestion menu lists passkeys for awareness but cannot start a sign-in;
   only the site can begin a ceremony. Conditional mediation would fix this.
-- **Sync covers vault items only.** Identities are stored under a separate key
-  (`src/utils/identity-storage.ts`) that `fullSync` never touches, so a persona
-  exists on one machine only. The vault sidebar says so rather than implying
-  otherwise. Extending sync to identities is straightforward; the multi-device
-  blocker in `docs/crypto-status.md` is the reason it has not been worth doing.
 - Closing a tab before answering the save prompt discards the pending save.
+
+The i18n retrofit is done for popup, onboarding, and the vault UI: every
+user-facing string on those surfaces goes through `src/i18n/strings.ts` (EN +
+QC). New strings must follow.
 
 Backlog seeds and planning work now live in:
 

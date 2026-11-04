@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Shield, Lock, Download, Check, AlertTriangle, Loader2 } from 'lucide-react';
+import { t } from '../i18n/strings';
+import { KitRestorePanel } from '../vault/KitRestorePanel';
 
-type Step = 'welcome' | 'account' | 'pin' | 'recovery' | 'done';
+type Step = 'welcome' | 'account' | 'pin' | 'recovery' | 'done' | 'restore';
 
 function send<T>(msg: { type: string; payload?: any }): Promise<{ success: boolean; data?: T; error?: string }> {
     return chrome.runtime.sendMessage(msg);
@@ -19,7 +21,7 @@ export default function App() {
 
     const handleAccountNext = () => {
         if (!email || !email.includes('@')) {
-            setError('Please enter a valid email address');
+            setError(t('onboardEmailInvalid'));
             return;
         }
         setError('');
@@ -28,11 +30,11 @@ export default function App() {
 
     const handlePinNext = async () => {
         if (pin.length < 4) {
-            setError('PIN must be at least 4 digits');
+            setError(t('onboardPinTooShort'));
             return;
         }
         if (pin !== pinConfirm) {
-            setError('PINs do not match');
+            setError(t('onboardPinMismatch'));
             return;
         }
         setError('');
@@ -45,7 +47,7 @@ export default function App() {
         if (resp.success) {
             setStep('recovery');
         } else {
-            setError(resp.error ?? 'Setup failed');
+            setError(resp.error ?? t('onboardSetupFailed'));
         }
     };
 
@@ -59,7 +61,7 @@ export default function App() {
         if (resp.success) {
             setRecoveryKit(resp.data);
         } else {
-            setError(resp.error ?? 'Failed to generate recovery kit');
+            setError(resp.error ?? t('onboardKitFailed'));
         }
     };
 
@@ -81,31 +83,29 @@ export default function App() {
                     <Shield className="w-8 h-8 text-vw-gold" />
                     <div>
                         <h1 className="text-xl font-bold text-[#161320]">VaultWares</h1>
-                        <p className="text-sm text-[#161320]/60">Identity Manager Setup</p>
+                        <p className="text-sm text-[#161320]/60">{t('onboardSubtitle')}</p>
                     </div>
                 </div>
 
                 {step === 'welcome' && (
                     <div className="space-y-6">
                         <div className="space-y-3">
-                            <h2 className="text-lg font-semibold text-[#161320]">Welcome to your zero-knowledge vault</h2>
+                            <h2 className="text-lg font-semibold text-[#161320]">{t('onboardWelcomeTitle')}</h2>
                             <p className="text-sm text-[#161320]/70">
-                                VaultWares uses post-quantum cryptography (ML-KEM-768, ML-DSA-65) to protect your data.
-                                Your vault is encrypted on this device and syncs only to VaultWarden running on your
-                                own machine — nothing is ever sent to us in a form we could read.
+                                {t('onboardWelcomeBody')}
                             </p>
                             <div className="bg-vw-warm-muted rounded-lg p-4 space-y-2">
                                 <div className="flex items-start gap-2">
                                     <Check className="w-4 h-4 text-vw-signal-online mt-0.5 flex-shrink-0" />
-                                    <span className="text-xs text-[#161320]/80">Passwords, addresses, cards, TOTP, and passkeys</span>
+                                    <span className="text-xs text-[#161320]/80">{t('onboardFeatureItems')}</span>
                                 </div>
                                 <div className="flex items-start gap-2">
                                     <Check className="w-4 h-4 text-vw-signal-online mt-0.5 flex-shrink-0" />
-                                    <span className="text-xs text-[#161320]/80">Encrypted sync to VaultWarden on this machine</span>
+                                    <span className="text-xs text-[#161320]/80">{t('onboardFeatureSync')}</span>
                                 </div>
                                 <div className="flex items-start gap-2">
                                     <Check className="w-4 h-4 text-vw-signal-online mt-0.5 flex-shrink-0" />
-                                    <span className="text-xs text-[#161320]/80">Post-quantum cryptography (NIST standardized)</span>
+                                    <span className="text-xs text-[#161320]/80">{t('onboardFeaturePqc')}</span>
                                 </div>
                             </div>
                         </div>
@@ -113,7 +113,35 @@ export default function App() {
                             onClick={() => setStep('account')}
                             className="w-full py-3 bg-vw-gold text-white rounded-lg font-medium hover:bg-[color-mix(in_srgb,_var(--vault-console-gold)_80%,_#000)] transition-colors"
                         >
-                            Get Started
+                            {t('onboardGetStarted')}
+                        </button>
+                        <button
+                            onClick={() => setStep('restore')}
+                            className="text-xs text-[#161320]/60 hover:text-[#161320] transition-colors"
+                        >
+                            {t('kitRestoreLink')}
+                        </button>
+                    </div>
+                )}
+
+                {step === 'restore' && (
+                    <div className="space-y-6">
+                        <div className="space-y-2">
+                            <h2 className="text-lg font-semibold text-[#161320]">{t('kitRestoreTitle')}</h2>
+                            <p className="text-sm text-[#161320]/70">{t('kitRestoreBody')}</p>
+                        </div>
+                        <KitRestorePanel
+                            variant="warm"
+                            onRestored={() => {
+                                chrome.tabs.create({ url: chrome.runtime.getURL('vault.html') });
+                                window.close();
+                            }}
+                        />
+                        <button
+                            onClick={() => setStep('welcome')}
+                            className="text-xs text-[#161320]/60 hover:text-[#161320] transition-colors"
+                        >
+                            {t('actionCancel')}
                         </button>
                     </div>
                 )}
@@ -121,11 +149,11 @@ export default function App() {
                 {step === 'account' && (
                     <div className="space-y-6">
                         <div className="space-y-2">
-                            <h2 className="text-lg font-semibold text-[#161320]">Create your account</h2>
-                            <p className="text-sm text-[#161320]/70">This email identifies your account. Your vault data stays encrypted.</p>
+                            <h2 className="text-lg font-semibold text-[#161320]">{t('onboardAccountTitle')}</h2>
+                            <p className="text-sm text-[#161320]/70">{t('onboardAccountBody')}</p>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-[#161320] mb-1.5">Email</label>
+                            <label className="block text-sm font-medium text-[#161320] mb-1.5">{t('onboardEmailLabel')}</label>
                             <input
                                 type="email"
                                 value={email}
@@ -139,7 +167,7 @@ export default function App() {
                             onClick={handleAccountNext}
                             className="w-full py-3 bg-vw-gold text-white rounded-lg font-medium hover:bg-[color-mix(in_srgb,_var(--vault-console-gold)_80%,_#000)] transition-colors"
                         >
-                            Continue
+                            {t('onboardContinue')}
                         </button>
                     </div>
                 )}
@@ -147,11 +175,11 @@ export default function App() {
                 {step === 'pin' && (
                     <div className="space-y-6">
                         <div className="space-y-2">
-                            <h2 className="text-lg font-semibold text-[#161320]">Set your unlock PIN</h2>
-                            <p className="text-sm text-[#161320]/70">This PIN decrypts your vault locally. Choose something memorable — there is no recovery without your kit.</p>
+                            <h2 className="text-lg font-semibold text-[#161320]">{t('onboardPinTitle')}</h2>
+                            <p className="text-sm text-[#161320]/70">{t('onboardPinBody')}</p>
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-[#161320] mb-1.5">PIN</label>
+                            <label className="block text-sm font-medium text-[#161320] mb-1.5">{t('onboardPinLabel')}</label>
                             <input
                                 type="password"
                                 value={pin}
@@ -161,7 +189,7 @@ export default function App() {
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-[#161320] mb-1.5">Confirm PIN</label>
+                            <label className="block text-sm font-medium text-[#161320] mb-1.5">{t('onboardPinConfirmLabel')}</label>
                             <input
                                 type="password"
                                 value={pinConfirm}
@@ -177,7 +205,7 @@ export default function App() {
                             className="w-full py-3 bg-vw-gold text-white rounded-lg font-medium hover:bg-[color-mix(in_srgb,_var(--vault-console-gold)_80%,_#000)] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                         >
                             {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-                            {loading ? 'Generating keys…' : 'Create Vault'}
+                            {loading ? t('onboardGeneratingKeys') : t('onboardCreateVault')}
                         </button>
                     </div>
                 )}
@@ -185,16 +213,15 @@ export default function App() {
                 {step === 'recovery' && (
                     <div className="space-y-6">
                         <div className="space-y-2">
-                            <h2 className="text-lg font-semibold text-[#161320]">Save your recovery kit</h2>
+                            <h2 className="text-lg font-semibold text-[#161320]">{t('onboardRecoveryTitle')}</h2>
                             <p className="text-sm text-[#161320]/70">
-                                If you lose this device or forget your PIN, the recovery kit is the only way to regain access to your vault.
-                                Store it somewhere safe — we cannot recover it for you.
+                                {t('onboardRecoveryBody')}
                             </p>
                         </div>
                         <div className="bg-[color-mix(in_srgb,_var(--vault-signal-warning)_22%,_var(--vault-warm-raised))] border border-[#161320]/10 rounded-lg p-4 flex items-start gap-3">
                             <AlertTriangle className="w-5 h-5 text-vw-signal-warning flex-shrink-0 mt-0.5" />
                             <p className="text-xs text-[#161320]/80">
-                                Without your recovery kit, losing your device means permanent loss of vault access.
+                                {t('onboardRecoveryWarning')}
                             </p>
                         </div>
                         {!recoveryKit ? (
@@ -204,7 +231,7 @@ export default function App() {
                                 className="w-full py-3 bg-vw-gold text-white rounded-lg font-medium hover:bg-[color-mix(in_srgb,_var(--vault-console-gold)_80%,_#000)] transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
                             >
                                 {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-                                Generate Recovery Kit
+                                {t('onboardGenerateKit')}
                             </button>
                         ) : (
                             <>
@@ -213,7 +240,7 @@ export default function App() {
                                     className="w-full py-3 bg-vw-console-raised text-white rounded-lg font-medium hover:bg-vw-console-elevated transition-colors flex items-center justify-center gap-2"
                                 >
                                     <Download className="w-4 h-4" />
-                                    {kitDownloaded ? 'Downloaded — Download Again' : 'Download Recovery Kit'}
+                                    {kitDownloaded ? t('onboardDownloadAgain') : t('onboardDownloadKit')}
                                 </button>
                                 {kitDownloaded && (
                                     <button
@@ -221,7 +248,7 @@ export default function App() {
                                         className="w-full py-3 bg-vw-gold text-white rounded-lg font-medium hover:bg-[color-mix(in_srgb,_var(--vault-console-gold)_80%,_#000)] transition-colors flex items-center justify-center gap-2"
                                     >
                                         <Check className="w-4 h-4" />
-                                        Open My Vault
+                                        {t('onboardOpenVault')}
                                     </button>
                                 )}
                             </>

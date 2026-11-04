@@ -1,4 +1,5 @@
 import { randomBytes } from '@noble/hashes/utils';
+import { t } from '../i18n/strings';
 
 const SETS = {
     uppercase: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
@@ -167,7 +168,8 @@ export function measurePasswordStrength(password: string): number {
 }
 
 export function strengthLabel(score: number): string {
-    return ['Very Weak', 'Weak', 'Fair', 'Strong', 'Very Strong'][score] ?? 'Weak';
+    const keys = ['strengthVeryWeak', 'strengthWeak', 'strengthFair', 'strengthStrong', 'strengthVeryStrong'] as const;
+    return t(keys[score] ?? 'strengthWeak');
 }
 
 export function strengthColor(score: number): string {

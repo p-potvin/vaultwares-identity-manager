@@ -1,6 +1,7 @@
 import { generateKemKeyPair, generateSigKeyPair, toBase64, fromBase64 } from './pqc';
 import { generateSymmetricKey, encrypt, decrypt } from './symmetric';
-import { deriveKeyFromPin, generateSalt, saltToBase64, saltFromBase64 } from './kdf';
+import { generateSalt, saltToBase64, saltFromBase64 } from './kdf';
+import { deriveKeyFromPinAsync } from './kdf-async';
 import type { KeychainState, EncBlob } from '../types';
 import { localStore, sessionStore } from '../platform/store';
 
@@ -55,7 +56,7 @@ export async function initKeychain(): Promise<{
 
 export async function wrapAndStoreMasterKey(masterKey: Uint8Array, pin: string): Promise<void> {
     const salt = generateSalt();
-    const derivedKey = deriveKeyFromPin(pin, salt);
+    const derivedKey = await deriveKeyFromPinAsync(pin, salt);
     const { ciphertext, nonce } = encrypt(masterKey, derivedKey);
 
     await localStore.set({
@@ -70,7 +71,7 @@ export async function unwrapMasterKey(pin: string): Promise<Uint8Array | null> {
     const saltB64 = result[SALT_KEY] as string | undefined;
     if (!wrapped || !saltB64) return null;
 
-    const derivedKey = deriveKeyFromPin(pin, saltFromBase64(saltB64));
+    const derivedKey = await deriveKeyFromPinAsync(pin, saltFromBase64(saltB64));
     try {
         return openEncBlob(wrapped, derivedKey);
     } catch {
@@ -94,12 +95,16 @@ export async function setDeviceId(deviceId: string): Promise<void> {
 /** Requires an unlocked vault: the secret key is encrypted under the master key. */
 export async function getKemSecretKey(): Promise<Uint8Array | null> {
     const state = await getKeychain();
-    if (!state?.kemSecretKeyEnc) return null;
+    if (!state?.kemSecretKeyEnc) {
+        console.error('keychain: kemSecretKeyEnc missing from the stored keychain');
+        return null;
+    }
     const masterKey = await getCachedMasterKey();
     if (!masterKey) return null; // locked
     try {
         return openEncBlob(state.kemSecretKeyEnc, masterKey);
-    } catch {
+    } catch (e) {
+        console.error('keychain: KEM secret key failed to decrypt:', e);
         return null;
     }
 }
@@ -107,7 +112,10 @@ export async function getKemSecretKey(): Promise<Uint8Array | null> {
 /** Requires an unlocked vault (the secret half is encrypted under the master key). */
 export async function getSigKeyPair(): Promise<{ publicKey: Uint8Array; secretKey: Uint8Array } | null> {
     const state = await getKeychain();
-    if (!state?.sigSecretKeyEnc || !state.sigPublicKey) return null;
+    if (!state?.sigSecretKeyEnc || !state.sigPublicKey) {
+        console.error('keychain: sig keypair missing from the stored keychain');
+        return null;
+    }
     const masterKey = await getCachedMasterKey();
     if (!masterKey) return null; // locked
     try {
@@ -115,7 +123,8 @@ export async function getSigKeyPair(): Promise<{ publicKey: Uint8Array; secretKe
             publicKey: fromBase64(state.sigPublicKey),
             secretKey: openEncBlob(state.sigSecretKeyEnc, masterKey),
         };
-    } catch {
+    } catch (e) {
+        console.error('keychain: signing key failed to decrypt:', e);
         return null;
     }
 }
@@ -185,8 +194,11 @@ export async function setCachedMasterKey(key: Uint8Array | null): Promise<void> 
             // The session area is in-memory on both platforms: chrome.storage.session
             // in the extension, a plain Map in the PWA. Never disk.
             await sessionStore.set({ [SESSION_KEY]: toBase64(key) });
-        } catch {
-            // the session area may not be available in every context
+        } catch (e) {
+            // the session area may not be available in every context — but a
+            // silent failure here reads as "unlock succeeded, vault still
+            // locked" after the background restarts, so it must be loud.
+            console.error('keychain: session store unavailable, master key held in memory only:', e);
         }
     } else {
         try {
@@ -219,8 +231,8 @@ export async function getCachedMasterKey(): Promise<Uint8Array | null> {
             lockAt = typeof storedLockAt === 'number' ? storedLockAt : null;
             return cachedMasterKey;
         }
-    } catch {
-        // ignore
+    } catch (e) {
+        console.error('keychain: session store read failed:', e);
     }
     return null;
 }

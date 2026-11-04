@@ -11,28 +11,31 @@ import {
     detectForms,
     formForElement,
     fillForm,
+    fillField,
     isVisible,
+    isSearchOrNonAuthField,
     type DetectedForm,
     type DetectedField,
     type FieldRole,
 } from './detect';
 import { showMenu, closeMenu, isMenuOpen, isAnchorAlive } from './menu';
 import { showSavePrompt } from './save-prompt';
+import { showTotpSlidePrompt, dismissTotpSlidePrompt } from './totp-prompt';
 import { t } from '../i18n/strings';
 // Static: a dynamic import() from a content script loads its chunk with a
 // <script> tag, which runs in the page's world rather than this one.
 import { generateFromPreset, PRESETS } from '../utils/password-generator';
 import { generateTotpCode } from '../utils/totp';
 
-function currentTotp(secret: string): string {
+function currentTotp(secret: string, options?: Parameters<typeof generateTotpCode>[1]): string {
     try {
-        return generateTotpCode(secret);
+        return generateTotpCode(secret, options);
     } catch {
         return '';
     }
 }
 import { loginIdentifier } from '../types';
-import type { VaultItem, LoginItem, CardItem, AddressItem, PasskeyItem, VaultSettings, Identity } from '../types';
+import type { VaultItem, LoginItem, CardItem, AddressItem, TotpItem, PasskeyItem, VaultSettings, Identity } from '../types';
 
 interface IdentifierSuggestion {
     value: string;
@@ -100,6 +103,12 @@ function fillDataForItem(item: VaultItem): Partial<Record<FieldRole, string>> {
                 totp: login.totpSecret ? currentTotp(login.totpSecret) : '',
             };
         }
+        case 'totp': {
+            const totp = item.data as TotpItem;
+            return {
+                totp: currentTotp(totp.secret, { digits: totp.digits, period: totp.period, algorithm: totp.algorithm }),
+            };
+        }
         case 'card': {
             const card = item.data as CardItem;
             return {
@@ -125,6 +134,30 @@ function fillDataForItem(item: VaultItem): Partial<Record<FieldRole, string>> {
         }
         default:
             return {};
+    }
+}
+
+/**
+ * Fills a verification-code input, handling both a single field and the
+ * split 4-8 box pattern many sites use for 2FA.
+ */
+function fillTotpIntoField(field: DetectedField, code: string): void {
+    const element = field.element;
+    const parent = element.parentElement;
+    const siblings = parent
+        ? Array.from(parent.querySelectorAll<HTMLInputElement>('input')).filter(
+            i => i.maxLength === 1 || i.size === 1,
+        )
+        : [];
+
+    if (siblings.length >= 4 && siblings.includes(element)) {
+        for (let i = 0; i < Math.min(siblings.length, code.length); i++) {
+            fillField(siblings[i], code[i]);
+        }
+        siblings[Math.min(siblings.length - 1, code.length - 1)]?.focus();
+    } else {
+        fillField(element, code);
+        element.focus();
     }
 }
 
@@ -172,8 +205,15 @@ const IDENTITY_ROLES: ReadonlySet<FieldRole> = new Set<FieldRole>([
 ]);
 
 async function openMenuFor(field: DetectedField): Promise<void> {
+    if (isSearchOrNonAuthField(field.element)) return;
+
+    // If forms cache is empty, rescan once before giving up
+    if (forms.length === 0) {
+        forms = detectForms();
+    }
+
     const form = formForElement(forms, field.element);
-    if (!form) return;
+    if (!form || form.kind === 'none') return;
 
     // Sign-up forms get the addresses the user already uses elsewhere: there is
     // no saved login to fill yet, but people reuse a handful of identifiers.
@@ -189,16 +229,54 @@ async function openMenuFor(field: DetectedField): Promise<void> {
     ]);
     const matches = response.data ?? [];
 
+    // If this field is a TOTP field, check if we have matching logins with TOTP or standalone TOTP items
+    if (field.role === 'totp') {
+        const itemWithTotp = matches.find(item =>
+            (item.itemType === 'login' && Boolean((item.data as LoginItem).totpSecret)) ||
+            item.itemType === 'totp'
+        );
+        if (itemWithTotp) {
+            const secret = itemWithTotp.itemType === 'totp'
+                ? (itemWithTotp.data as TotpItem).secret
+                : (itemWithTotp.data as LoginItem).totpSecret!;
+            const totpData = itemWithTotp.itemType === 'totp' ? (itemWithTotp.data as TotpItem) : null;
+            const accountLabel = itemWithTotp.metadata.label + (itemWithTotp.itemType === 'login' && (itemWithTotp.data as LoginItem).username ? ` (${(itemWithTotp.data as LoginItem).username})` : '');
+
+            showTotpSlidePrompt({
+                accountLabel,
+                secret,
+                digits: totpData?.digits ?? 6,
+                period: totpData?.period ?? 30,
+                algorithm: totpData?.algorithm ?? 'SHA1',
+                onFill: (code) => {
+                    fillTotpIntoField(field, code);
+                    void send('UPDATE_ITEM_LAST_USED', { itemId: itemWithTotp.id });
+                },
+            });
+            return;
+        }
+    }
+
     // Offer personas where the form actually has fields for one — a sign-up or
     // checkout form — rather than on a bare username/password pair.
     const formWantsIdentity = form.fields.some(f => IDENTITY_ROLES.has(f.role));
     const identities = formWantsIdentity ? (identityResponse.data ?? []) : [];
 
-    // Passkeys are listed for awareness only. A ceremony can only be started by
-    // the site calling navigator.credentials.get(), so a clickable entry here
-    // would promise a sign-in this menu cannot perform.
     const passkeys = matches.filter(item => item.itemType === 'passkey');
-    const fillable = matches.filter(item => item.itemType !== 'passkey');
+    const logins = matches.filter(item => item.itemType === 'login');
+
+    // Standalone passkeys that don't correspond to any login item
+    const standalonePasskeys = passkeys.filter(pk => {
+        const pkData = pk.data as PasskeyItem;
+        const pkUser = (pkData.userName || '').trim().toLowerCase();
+        return !logins.some(lg => {
+            const lgData = lg.data as LoginItem;
+            const lgUser = (lgData.username || lgData.email || '').trim().toLowerCase();
+            return pkUser && lgUser && pkUser === lgUser;
+        });
+    });
+
+    const fillable = [...logins, ...matches.filter(item => item.itemType !== 'login' && item.itemType !== 'passkey'), ...standalonePasskeys];
 
     // Most recently used first. The background returns matches ranked by how
     // closely the host matches, and the sort is stable, so never-used items
@@ -223,16 +301,78 @@ async function openMenuFor(field: DetectedField): Promise<void> {
         },
     }));
 
-    const itemEntries = ordered.map(item => ({
-        id: item.id,
-        label: item.metadata.label,
-        sublabel: subtitleFor(item),
-        badge: item.identityId ? (identityNames.get(item.identityId) || t('menuIdentityFallback')) : undefined,
-        onChoose: () => {
-            fillForm(form, fillDataForItem(item));
-            void send('UPDATE_ITEM_LAST_USED', { itemId: item.id });
-        },
-    }));
+    const itemEntries = ordered.map(item => {
+        const hasTotp = (item.itemType === 'login' && Boolean((item.data as LoginItem).totpSecret)) || item.itemType === 'totp';
+        const hasPasskey = item.itemType === 'passkey' || passkeys.some(pk => {
+            const pkData = pk.data as PasskeyItem;
+            const loginData = item.itemType === 'login' ? (item.data as LoginItem) : null;
+            const user = (loginData?.username || loginData?.email || '').trim().toLowerCase();
+            const pkUser = (pkData.userName || '').trim().toLowerCase();
+            return !pkUser || !user || pkUser === user;
+        });
+
+        // Identity name first (the item belongs to a persona), then the
+        // capability badges.
+        const badges: string[] = [];
+        if (item.identityId) badges.push(identityNames.get(item.identityId) || t('menuIdentityFallback'));
+        if (hasTotp) badges.push('TOTP');
+        if (hasPasskey) badges.push('PK');
+
+        const itemUrl = item.itemType === 'login'
+            ? ((item.data as LoginItem).url || item.metadata.url || item.metadata.domain || '')
+            : (item.metadata.url || item.metadata.domain || '');
+
+        return {
+            id: item.id,
+            label: item.metadata.label,
+            sublabel: subtitleFor(item),
+            url: itemUrl || undefined,
+            badge: badges.length > 0 ? badges.join(' · ') : undefined,
+            onChoose: () => {
+                if (item.itemType === 'totp') {
+                    const totp = item.data as TotpItem;
+                    const code = currentTotp(totp.secret, { digits: totp.digits, period: totp.period, algorithm: totp.algorithm });
+                    if (code) fillTotpIntoField(field, code);
+                } else {
+                    fillForm(form, fillDataForItem(item));
+                }
+                void send('UPDATE_ITEM_LAST_USED', { itemId: item.id });
+
+                // If the filled login has a TOTP secret, look for a TOTP field on the page or listen for one to appear
+                const totpSecret = item.itemType === 'totp'
+                    ? (item.data as TotpItem).secret
+                    : (item.itemType === 'login' ? (item.data as LoginItem).totpSecret : undefined);
+
+                if (totpSecret) {
+                    const accountLabel = item.metadata.label + (item.itemType === 'login' && (item.data as LoginItem).username ? ` (${(item.data as LoginItem).username})` : '');
+                    const totpData = item.itemType === 'totp' ? (item.data as TotpItem) : null;
+
+                    const tryTriggerTotpPrompt = () => {
+                        const totpField = forms.flatMap(f => f.fields).find(f => f.role === 'totp' && isVisible(f.element));
+                        if (totpField) {
+                            showTotpSlidePrompt({
+                                accountLabel,
+                                secret: totpSecret,
+                                digits: totpData?.digits ?? 6,
+                                period: totpData?.period ?? 30,
+                                algorithm: totpData?.algorithm ?? 'SHA1',
+                                onFill: (code) => fillTotpIntoField(totpField, code),
+                            });
+                            return true;
+                        }
+                        return false;
+                    };
+
+                    if (!tryTriggerTotpPrompt()) {
+                        // Check after brief delays for SPAs that transition to a 2FA screen
+                        setTimeout(tryTriggerTotpPrompt, 500);
+                        setTimeout(tryTriggerTotpPrompt, 1500);
+                        setTimeout(tryTriggerTotpPrompt, 3000);
+                    }
+                }
+            },
+        };
+    });
 
     const locked = response.locked || identityResponse.locked;
 
@@ -275,18 +415,23 @@ async function openMenuFor(field: DetectedField): Promise<void> {
         }]
         : [];
 
+    // Personas first on a sign-up form: filling the persona is the step that
+    // comes before choosing a login there. Identifiers already used across the
+    // vault come right after the generator.
+    const entries = form.kind === 'signup'
+        ? [...generateEntry, ...suggestionEntries, ...identityEntries, ...itemEntries]
+        : [...itemEntries, ...identityEntries, ...generateEntry];
+
+    // If unlocked and there are no suggestions, do not open an empty popup
+    if (!locked && entries.length === 0) {
+        return;
+    }
+
     showMenu({
         anchor: field.element,
         header: form.kind === 'signup' ? t('menuSignupHeader') : t('menuLoginsHeader'),
-        notice: passkeys.length
-            ? `${t('menuPasskeyBadge')}: ${passkeys[0].metadata.label}`
-            : undefined,
         emptyMessage: locked ? t('menuLocked') : t('menuNoMatches'),
-        // Personas first on a sign-up form: filling the persona is the step that
-        // comes before choosing a login there.
-        entries: form.kind === 'signup'
-            ? [...generateEntry, ...suggestionEntries, ...identityEntries, ...itemEntries]
-            : [...itemEntries, ...identityEntries, ...generateEntry],
+        entries,
         // Typing a username narrows the list; typing a password is not a search.
         filterOnInput: field.element.type !== 'password',
         noFilterMatchesMessage: t('menuNoFilterMatches'),
@@ -363,7 +508,7 @@ function offerToSave(form: DetectedForm): void {
     const credentials = readCredentials(form);
     if (!credentials) return;
 
-    const fingerprint = `${credentials.username} ${credentials.password}`;
+    const fingerprint = `${credentials.username}\0${credentials.password}`;
     if (fingerprint === lastQueued) return;
     lastQueued = fingerprint;
 
@@ -433,7 +578,9 @@ async function showPendingSaveFromPreviousPage(): Promise<void> {
 /* ----------------------------------------------------------------- wiring */
 
 function wireForm(form: DetectedForm): void {
+    if (form.kind === 'none') return;
     for (const field of form.fields) {
+        if (isSearchOrNonAuthField(field.element)) continue;
         if (wiredFields.has(field.element)) continue;
         if (!TRIGGER_ROLES.has(field.role)) continue;
         wiredFields.add(field.element);

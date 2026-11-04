@@ -64,14 +64,19 @@ export function recoverMasterKey(kit: RecoveryKit, pin: string): Uint8Array {
 /**
  * Restore a kit onto this device: rebuilds the keychain so synced envelopes can
  * be decrypted again. Returns the master key so the caller can unlock.
+ *
+ * `deviceId` keeps the restoring device's own identity (the kit does not know
+ * it); a null deviceId leaves every create/update handler refusing with "No
+ * device ID" until something sets one.
  */
-export async function restoreFromRecoveryKit(kit: RecoveryKit, pin: string): Promise<Uint8Array> {
+export async function restoreFromRecoveryKit(kit: RecoveryKit, pin: string, deviceId: string | null = null): Promise<Uint8Array> {
     const masterKey = recoverMasterKey(kit, pin);
 
     // Prove the kit's secret keys really open under this master key before
     // overwriting any local state.
     try {
         decrypt(fromBase64(kit.kemSecretKeyEnc.ciphertext), fromBase64(kit.kemSecretKeyEnc.nonce), masterKey);
+        decrypt(fromBase64(kit.sigSecretKeyEnc.ciphertext), fromBase64(kit.sigSecretKeyEnc.nonce), masterKey);
     } catch {
         throw new Error('Recovery kit is corrupt: account keys do not match the master key');
     }
@@ -81,7 +86,7 @@ export async function restoreFromRecoveryKit(kit: RecoveryKit, pin: string): Pro
         sigPublicKey: kit.sigPublicKey,
         kemSecretKeyEnc: kit.kemSecretKeyEnc as EncBlob,
         sigSecretKeyEnc: kit.sigSecretKeyEnc as EncBlob,
-        deviceId: null,
+        deviceId,
     };
     await localStore.set({ vw_keychain: state });
 

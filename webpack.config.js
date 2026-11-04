@@ -18,6 +18,9 @@ module.exports = {
         popup: './src/popup/index.tsx',
         vault: './src/vault/index.tsx',
         onboarding: './src/onboarding/index.tsx',
+        // Argon2id runs here, off the background document's event loop, so
+        // messaging (popup open, badge, unlock) never queues behind a derivation.
+        'kdf-worker': './src/workers/kdf-worker.ts',
     },
     output: {
         path: path.resolve(__dirname, 'dist'),
@@ -63,7 +66,19 @@ module.exports = {
         new CopyWebpackPlugin({
             patterns: [
                 { from: 'manifest.json', to: 'manifest.json' },
-                { from: 'public/icons', to: 'icons' },
+                {
+                    from: 'public/icons',
+                    to: 'icons',
+                    // Named individually rather than globbed: public/icons also
+                    // holds the 1024px source masters, the PWA's icons and the
+                    // build script, and none of that belongs in the extension.
+                    // The manifest references exactly these three.
+                    filter: absolutePath => [
+                        'icon16.png',
+                        'icon48.png',
+                        'icon128.png',
+                    ].includes(path.basename(absolutePath)),
+                },
             ],
         }),
     ],

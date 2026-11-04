@@ -46,7 +46,7 @@ A privacy-first identity vault that lets users:
 - [x] Zero-knowledge encryption model (PQC + symmetric + KDF)
 - [x] API surface `/v1/` with auth, vault, sync, device routes
 - [x] Database schema v1 (Tortoise ORM + Prisma)
-- [x] Chrome + Firefox MV3 compatibility
+- [x] Chrome + Firefox MV3 compatibility (dual `background` keys, gecko ID, AMO `data_collection_permissions: none` — nothing is transmitted to the developer)
 - [x] Password generator presets (Classic, Correct-Horse, The Token)
 - [x] Configurable generator rules GUI
 - [x] Auto-lock fix (session storage for master key persistence)
@@ -54,6 +54,11 @@ A privacy-first identity vault that lets users:
 - [x] Popup: quick gen behind button, autofill from popup, new item from current tab
 - [x] Content script: AUTOFILL message listener for popup-triggered fill
 - [x] Identity management: Identity type, encrypted storage, AI generation (Ollama JSON), identity-first vault UI, popup grouping by identity, content script identity grouping, item-to-identity assignment, lastUsedAt tracking
+- [x] Proton Pass import: .zip/.json/.csv parsing client-side, logins/cards/identities/aliases/extraFields, passkey recovery from Proton MessagePack COSE keys (ES256 sign/verify verified), passkey dedupe
+- [x] CSV export of the vault (RFC 4180)
+- [x] TOTP autofill: live code generation on fill, split 4-8 box OTP inputs, live code badge in inline menu and popup
+- [x] WebAuthn passkeys: full authenticator (ES256), consent prompt, page-world interception, Proton passkey migration, subdomain RP matching, byte-level credentialId matching
+- [x] Toolbar badge with per-tab match count
 - [x] Manual identity creation and editing (no generation endpoint required)
 - [x] WebAuthn authenticator: `navigator.credentials` interception, ES256 keygen, CBOR attestation, DER assertion signing, in-page consent, browser fallback
 - [x] Field detection rewrite: shadow-DOM traversal, MutationObserver rescan for SPA forms, per-form scoping, keyboard navigation, save-login prompt
@@ -65,6 +70,7 @@ A privacy-first identity vault that lets users:
 - [x] Offline queue and retry behavior
 - [x] Auto-sync on startup + periodic sync (60s interval)
 - [x] Sync conflict resolution (last-write-wins by updatedAt)
+- [x] Identities sync through the same batch protocol (routed by `envelope.itemType`, tombstones propagate deletions)
 - [ ] Domain profile and identity suggestion APIs
 - [ ] Generation job orchestration (pipelines)
 - [ ] Stabilize testing and rollout gates
@@ -76,7 +82,7 @@ A privacy-first identity vault that lets users:
 - [ ] PWA editing and offline writes
 - [ ] WebAuthn unlock (Face ID) for the PWA, as a relying party
 - [ ] Mock subscription and entitlement surfaces
-- [ ] Cross-platform QA matrix
+- [x] Cross-platform QA matrix (`docs/qa-matrix.md`)
 - [ ] Keep paid/telecom/network features mocked
 
 #### Not planned: native iOS and Android — decided 2026-08-08
@@ -122,6 +128,7 @@ vault readable, not into chasing an integration the platform will not grant.
 **Goal:** Define visual identity, trust language, interaction model, and encryption-facing UX.
 
 **Workstreams:**
+
 1. Theme audit and candidate skins (from `vault-themes`)
 2. Brand foundation (name, tone, value prop, trust language, icon direction)
 3. UX skeleton (extension popup, full vault, desktop, iOS, Android IA)
@@ -135,6 +142,7 @@ vault readable, not into chasing an integration the platform will not grant.
 **Goal:** Turn the local-only prototype into the first client of a global encrypted identity platform.
 
 **Workstreams:**
+
 1. Extension architecture rewrite (encrypted storage, sync-ready, module boundaries)
 2. Cross-browser support (Chrome/Firefox packaging, QA matrix)
 3. API surface spec (`/v1` routes for auth, devices, vault, sync, domains, generation, artifacts)
@@ -165,6 +173,7 @@ vault readable, not into chasing an integration the platform will not grant.
 **Goal:** Deliver companion clients and release-grade QA.
 
 **Workstreams:**
+
 1. Desktop client (vault browsing, CRUD, artifact review, device approval, recovery, mock plans)
 2. ~~iOS client~~ — not planned, see Phase 3
 3. ~~Android client~~ — not planned, see Phase 3
@@ -181,6 +190,7 @@ vault readable, not into chasing an integration the platform will not grant.
 **Constraint:** Research-only — no implementation until legal entity, budget, and provider strategy are ready.
 
 **Workstreams:**
+
 1. Billing research (self-managed vs provider, legal/compliance, mock-to-real migration)
 2. Phone number product research (providers, portability, compliance, fraud)
 3. IP/network product research (static vs dynamic, abuse monitoring, provisioning)
@@ -200,7 +210,7 @@ vault readable, not into chasing an integration the platform will not grant.
 ## Future Repo Map
 
 | Repo | Purpose |
-|------|---------|
+| ------ | --------- |
 | `vaultwares-identity-manager` | Browser extension + mobile PWA + shared planning anchor |
 | `vault-warden` | The vault the clients actually sync to (tailnet-only, on greencloud) |
 | `vaultwares-identity-api` | Account, sync, device, entitlement, orchestration APIs |
@@ -213,6 +223,7 @@ vault readable, not into chasing an integration the platform will not grant.
 ## Backlog Issue Seeds
 
 ### EPIC-01
+
 - Audit `vault-themes` and shortlist candidate skins
 - Define semantic token map for Identity Manager surfaces
 - Create brand strategy brief and trust-language guide
@@ -221,6 +232,7 @@ vault readable, not into chasing an integration the platform will not grant.
 - Design encryption, recovery, and device approval journeys
 
 ### EPIC-02
+
 - Split extension responsibilities into detection, autofill, vault UI, sync, unlock modules
 - Define Chrome/Firefox packaging compatibility matrix
 - Define `/v1` API route groups and ownership
@@ -230,6 +242,7 @@ vault readable, not into chasing an integration the platform will not grant.
 - Define mock subscription and entitlement contracts
 
 ### EPIC-03
+
 - Define client key hierarchy and wrapping model
 - Define PIN/session unlock rules across clients
 - Define vault envelope v1 format
@@ -238,6 +251,7 @@ vault readable, not into chasing an integration the platform will not grant.
 - Define audit/risk event taxonomy and safe logging rules
 
 ### EPIC-04
+
 - Draft desktop product requirements and shell responsibilities
 - Draft iOS app and Password AutoFill extension requirements
 - Draft Android app and AutofillService requirements
@@ -245,6 +259,7 @@ vault readable, not into chasing an integration the platform will not grant.
 - Define cross-platform QA matrix and release checklist
 
 ### EPIC-05
+
 - Research billing best practices and mock-to-real migration strategy
 - Research phone-number provider landscape and feasibility
 - Research IP/network product feasibility

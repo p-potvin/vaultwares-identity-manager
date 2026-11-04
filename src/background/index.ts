@@ -1,7 +1,12 @@
 import { initKeychain, wrapAndStoreMasterKey, unwrapMasterKey, setCachedMasterKey, getCachedMasterKey, setLockDeadline, onMasterKeyCleared, setDeviceId, getKeychain, isInitialized, getKemPublicKey, getSigKeyPair, getKemSecretKey, clearKeychain } from '../crypto/keychain';
 import { createEnvelope, openEnvelope, createVaultItem, updateVaultItemTimestamp } from '../crypto/envelope';
-import { generateRecoveryKit, downloadRecoveryKit } from '../crypto/recovery';
+import { generateRecoveryKit, downloadRecoveryKit, parseRecoveryKit, restoreFromRecoveryKit } from '../crypto/recovery';
 import { getEncryptedItems, saveEncryptedItem, deleteEncryptedItem, replaceAllEncryptedItems, getSettings, saveSettings, getSyncCursor, setSyncCursor } from '../utils/storage';
+// Static on purpose. A dynamic import() here compiles to webpack's <script>-tag
+// chunk loader, and an MV3 service worker has no `document`: on Chrome every
+// handler that used one failed with "document is not defined" (page matches)
+// or never answered (save prompt).
+import { matchStrength, MATCH_NONE, MATCH_EXACT, normalizeDomain, getFullDomain, normalizeStoredUrl } from '../utils/domain';
 import { getEncryptedIdentities, saveEncryptedIdentity, deleteEncryptedIdentity, replaceAllEncryptedIdentities, encryptIdentity, decryptIdentity } from '../utils/identity-storage';
 import { register as apiRegister } from '../api/auth';
 import { createVaultItem as apiCreateItem, updateVaultItem as apiUpdateItem, deleteVaultItem as apiDeleteItem } from '../api/vault';
@@ -14,11 +19,6 @@ import { openAccountKeyBlob, openPortableKeychain, fromPortableKeychain } from '
 import { prepareCeremony, performCreate, performGet, WebAuthnError, type PasskeyRecord, type VaultAccess } from '../webauthn/service';
 import type { SerializedCreationOptions, SerializedRequestOptions } from '../webauthn/types';
 import { localStore } from '../platform/store';
-// Static on purpose. A dynamic import() here compiles to webpack's <script>-tag
-// chunk loader, and an MV3 service worker has no `document`: on Chrome every
-// handler that used one failed with "document is not defined" (page matches)
-// or never answered (save prompt).
-import { matchStrength, MATCH_NONE, MATCH_EXACT, normalizeDomain, getFullDomain } from '../utils/domain';
 import type { VaultItem, EncryptedVaultItem, ItemType, VaultItemData, VaultItemMetadata, VaultSettings, RecoveryKit, Identity, GeneratedIdentityData, PasskeyItem, LoginItem } from '../types';
 
 export type MessageType =
@@ -37,8 +37,10 @@ export type MessageType =
     | 'SAVE_SETTINGS'
     | 'GENERATE_RECOVERY_KIT'
     | 'DOWNLOAD_RECOVERY_KIT'
+    | 'RESTORE_FROM_KIT'
     | 'SYNC'
     | 'GET_PAGE_MATCHES'
+    | 'GET_ACTIVE_TAB'
     | 'OPEN_POPUP_CREATE'
     | 'GET_IDENTITIES'
     | 'CREATE_IDENTITY'
@@ -175,6 +177,59 @@ function flashSavedBadge(): void {
 }
 
 /**
+ * Shows how many vault items match the tab's domain, so the user knows the
+ * vault has something for the page before clicking the icon. Cleared on
+ * chrome:// and extension pages, where "matches" means nothing.
+ */
+async function updateTabBadge(tabId?: number, url?: string): Promise<void> {
+    try {
+        let targetTabId = tabId;
+        let targetUrl = url;
+
+        if (targetTabId === undefined) {
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab?.id) return;
+            targetTabId = tab.id;
+            targetUrl = tab.url;
+        } else if (!targetUrl) {
+            try {
+                const tab = await chrome.tabs.get(targetTabId);
+                targetUrl = tab.url;
+            } catch {
+                return;
+            }
+        }
+
+        if (!targetUrl || /^(about|chrome|moz-extension|edge|chrome-extension):/.test(targetUrl)) {
+            await chrome.action.setBadgeText({ text: '', tabId: targetTabId });
+            return;
+        }
+
+        const matches = await handleGetPageMatches({ url: targetUrl });
+        const count = matches.success ? (matches.data as unknown[] | undefined)?.length ?? 0 : 0;
+
+        if (count > 0) {
+            await chrome.action.setBadgeText({ text: String(count), tabId: targetTabId });
+            await chrome.action.setBadgeBackgroundColor({ color: '#D6A441', tabId: targetTabId });
+            if (chrome.action.setBadgeTextColor) {
+                await chrome.action.setBadgeTextColor({ color: '#0b0813', tabId: targetTabId });
+            }
+        } else {
+            await chrome.action.setBadgeText({ text: '', tabId: targetTabId });
+        }
+    } catch {
+        // Tab may have closed or be unavailable; a badge is never worth an error.
+    }
+}
+
+chrome.tabs.onActivated.addListener(info => { void updateTabBadge(info.tabId); });
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === 'complete' || changeInfo.url) {
+        void updateTabBadge(tabId, changeInfo.url || tab?.url);
+    }
+});
+
+/**
  * Pushes the auto-lock back by the configured idle time.
  *
  * The timer only locks promptly while this worker happens to be alive; the
@@ -229,7 +284,7 @@ async function handleSetupAccount(payload: { email: string; pin: string }): Prom
 
         await setDeviceId(deviceId);
         await setCachedMasterKey(masterKey);
-        resetLockTimer();
+        await resetLockTimer();
 
         return { success: true, data: { deviceId, deviceRole } };
     } catch (e) {
@@ -238,22 +293,39 @@ async function handleSetupAccount(payload: { email: string; pin: string }): Prom
 }
 
 async function handleUnlock(payload: { pin: string }): Promise<MessageResponse> {
-    try {
-        const masterKey = await unwrapMasterKey(payload.pin);
-        if (!masterKey) {
-            return { success: false, error: 'Invalid PIN' };
+    // The auto-unlocker and an Enter press can request the same PIN within the
+    // same second; one derivation serves both instead of two 64 MiB Argon2id
+    // passes racing in one worker. Different PINs serialize for the same
+    // reason — memory, not just CPU.
+    if (inFlightUnlock?.pin === payload.pin) return inFlightUnlock.promise;
+    const promise = unlockChain.then(async (): Promise<MessageResponse> => {
+        try {
+            const masterKey = await unwrapMasterKey(payload.pin);
+            if (!masterKey) {
+                return { success: false, error: 'Invalid PIN' };
+            }
+            await setCachedMasterKey(masterKey);
+            await resetLockTimer();
+            void updateTabBadge();
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: (e as Error).message };
         }
-        await setCachedMasterKey(masterKey);
-        await resetLockTimer();
-        return { success: true };
-    } catch (e) {
-        return { success: false, error: (e as Error).message };
-    }
+    });
+    inFlightUnlock = { pin: payload.pin, promise };
+    unlockChain = promise.then(() => {
+        if (inFlightUnlock?.promise === promise) inFlightUnlock = null;
+    });
+    return promise;
 }
+
+let unlockChain: Promise<unknown> = Promise.resolve();
+let inFlightUnlock: { pin: string; promise: Promise<MessageResponse> } | null = null;
 
 async function handleLock(): Promise<MessageResponse> {
     await setCachedMasterKey(null);
     if (lockTimer) clearTimeout(lockTimer);
+    void updateTabBadge();
     return { success: true };
 }
 
@@ -328,6 +400,19 @@ async function handleGetItems(): Promise<MessageResponse> {
 }
 
 /**
+ * Keeps the stored URL in cleartext metadata on every login write, so page
+ * matching can rank from the envelope alone. Older items only carry the
+ * registrable domain in metadata and still match at that level; decrypting
+ * every login to peek at its URL cost seconds per badge update on a
+ * 1,650-item vault, and gigabytes of garbage with it.
+ */
+function withNormalizedLoginUrl(itemType: ItemType, data: VaultItemData, metadata: VaultItemMetadata): VaultItemMetadata {
+    if (itemType !== 'login') return metadata;
+    const url = (data as LoginItem).url;
+    return url ? { ...metadata, url: normalizeStoredUrl(url) } : metadata;
+}
+
+/**
  * Counts for the popup, read from envelope metadata without decrypting.
  *
  * The popup used to call GET_ITEMS — decrypting and shipping every password in
@@ -349,7 +434,7 @@ async function handleCreateItem(payload: { itemType: ItemType; data: VaultItemDa
         const sigKp = await getSigKeyPair();
         if (!kemPubKey || !sigKp) return { success: false, error: 'Keychain not initialized' };
 
-        const item = createVaultItem(payload.itemType, payload.data, payload.metadata, keychain.deviceId);
+        const item = createVaultItem(payload.itemType, payload.data, withNormalizedLoginUrl(payload.itemType, payload.data, payload.metadata), keychain.deviceId);
         const encrypted = createEnvelope(item, kemPubKey, sigKp.secretKey, keychain.deviceId);
 
         await saveEncryptedItem(encrypted);
@@ -382,7 +467,7 @@ async function handleUpdateItem(payload: { id: string; data: VaultItemData; meta
         const updated: VaultItem = {
             ...item,
             data: payload.data,
-            metadata: payload.metadata,
+            metadata: withNormalizedLoginUrl(item.itemType, payload.data, payload.metadata),
             updatedAt: new Date().toISOString(),
         };
 
@@ -433,6 +518,30 @@ async function handleGenerateRecoveryKit(payload: { pin: string }): Promise<Mess
 async function handleDownloadRecoveryKit(payload: { kit: RecoveryKit }): Promise<MessageResponse> {
     try {
         downloadRecoveryKit(payload.kit);
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: (e as Error).message };
+    }
+}
+
+/**
+ * Rebuilds this device's keychain from a recovery kit.
+ *
+ * The kit carries both secret halves and the master key (PIN-wrapped), so this
+ * is the way back onto a device whose keychain lost them — the vault unlocks
+ * but can no longer decrypt or create anything. The kit is verified against
+ * its own master key before any local state is touched (see
+ * restoreFromRecoveryKit), so a wrong PIN or a corrupt file changes nothing.
+ */
+async function handleRestoreFromKit(payload: { kitEncoded: string; pin: string }): Promise<MessageResponse> {
+    try {
+        const kit = parseRecoveryKit(payload.kitEncoded);
+        // Keep this device's identity where it has one; a fresh device mints its own.
+        const deviceId = (await getKeychain())?.deviceId ?? crypto.randomUUID();
+        const masterKey = await restoreFromRecoveryKit(kit, payload.pin, deviceId);
+        await setCachedMasterKey(masterKey);
+        await resetLockTimer();
+        void updateTabBadge();
         return { success: true };
     } catch (e) {
         return { success: false, error: (e as Error).message };
@@ -493,52 +602,59 @@ function handleGetSyncStatus(): MessageResponse {
 async function handleGetPageMatches(payload: { url: string }): Promise<MessageResponse> {
     try {
         const items = await getEncryptedItems();
-        const kemSecretKey = await getKemSecretKey();
-        const sigKp = await getSigKeyPair();
-
-        if (!kemSecretKey || !sigKp) return { success: true, data: [], locked: true };
 
         const masterKey = await getCachedMasterKey();
         if (!masterKey) return { success: true, data: [], locked: true };
 
+        const kemSecretKey = await getKemSecretKey();
+        const sigKp = await getSigKeyPair();
+        if (!kemSecretKey || !sigKp) {
+            // The vault is unlocked, so this is not a lock state — it is a
+            // keychain that cannot produce its keys (older format, or a blob
+            // that no longer decrypts). Reporting locked here made the popup
+            // bounce back to the PIN screen in a loop no PIN could win.
+            return { success: false, error: 'Keychain could not be opened' };
+        }
+
+        // Static import, not a dynamic one: webpack serves dynamic imports as
+        // JSONP chunks, which need `document` — a service worker has none, so
+        // every match request hung there and the badge never showed a count.
+
         // Ranked, not filtered: a credential saved for this exact subdomain
         // should outrank one saved for a sibling of the same parent domain.
-        const scored: { item: VaultItem; strength: number }[] = [];
+        // Scoring reads only cleartext envelope metadata — metadata sits
+        // outside the ciphertext — so a 1,650-item vault scores in
+        // milliseconds instead of decrypting every login per badge update.
+        const scored: { enc: EncryptedVaultItem; strength: number }[] = [];
 
         for (const enc of items) {
             if (enc.deletedAt) continue;
-
-            let strength = matchStrength(enc.envelope.metadata.domain || '', payload.url);
-
-            // The stored URL can be more specific than metadata.domain, which
-            // older versions flattened to the registrable domain.
-            let item: VaultItem | null = null;
-            if (enc.envelope.itemType === 'login' || strength > MATCH_NONE) {
-                try {
-                    item = openItem(enc, kemSecretKey, sigKp.publicKey);
-                } catch (e) {
-                    console.error('Failed to decrypt item:', enc.id, e);
-                    continue;
-                }
+            const meta = enc.envelope.metadata;
+            let strength = MATCH_NONE;
+            if (meta.url) {
+                strength = matchStrength(meta.url, payload.url);
+            } else if (meta.domain) {
+                strength = matchStrength(meta.domain, payload.url);
             }
-            if (!item) continue;
-
-            if (item.itemType === 'login') {
-                const login = item.data as LoginItem;
-                if (login.url) {
-                    strength = Math.max(strength, matchStrength(login.url, payload.url));
-                }
-            }
-
-            if (strength > MATCH_NONE) scored.push({ item, strength });
+            if (strength > MATCH_NONE) scored.push({ enc, strength });
         }
 
         scored.sort((a, b) => {
             if (a.strength !== b.strength) return b.strength - a.strength;
-            return (b.item.lastUsedAt ?? '').localeCompare(a.item.lastUsedAt ?? '');
+            return (b.enc.envelope.lastUsedAt ?? '').localeCompare(a.enc.envelope.lastUsedAt ?? '');
         });
 
-        return { success: true, data: scored.map(s => s.item) };
+        // Only the matches get opened — a handful, not the whole vault.
+        const matches: VaultItem[] = [];
+        for (const s of scored) {
+            try {
+                matches.push(openItem(s.enc, kemSecretKey, sigKp.publicKey));
+            } catch (e) {
+                console.error('Failed to decrypt item:', s.enc.id, e);
+            }
+        }
+
+        return { success: true, data: matches };
     } catch (e) {
         return { success: false, error: (e as Error).message };
     }
@@ -692,12 +808,17 @@ function createIdentityObject(data: GeneratedIdentityData, deviceId: string): Id
 async function handleGetIdentities(): Promise<MessageResponse> {
     try {
         const encIdentities = await getEncryptedIdentities();
-        const kemSecretKey = await getKemSecretKey();
-        const sigKp = await getSigKeyPair();
-        if (!kemSecretKey || !sigKp) return { success: true, data: [], locked: true };
 
         const masterKey = await getCachedMasterKey();
         if (!masterKey) return { success: true, data: [], locked: true };
+
+        const kemSecretKey = await getKemSecretKey();
+        const sigKp = await getSigKeyPair();
+        if (!kemSecretKey || !sigKp) {
+            // Unlocked vault with an unreadable keychain is an error, not a
+            // lock state — see handleGetPageMatches.
+            return { success: false, error: 'Keychain could not be opened' };
+        }
 
         const identities: Identity[] = [];
         for (const enc of encIdentities) {
@@ -726,6 +847,7 @@ async function handleCreateIdentity(payload: { data: GeneratedIdentityData }): P
         const identity = createIdentityObject(payload.data, keychain.deviceId);
         const encrypted = encryptIdentity(identity, kemPubKey, sigKp.secretKey, keychain.deviceId);
         await saveEncryptedIdentity(encrypted);
+        await enqueueCreate(encrypted);
         flashSavedBadge();
 
         return { success: true, data: identity };
@@ -746,6 +868,7 @@ async function handleUpdateIdentity(payload: { identity: Identity }): Promise<Me
         const updated: Identity = { ...payload.identity, updatedAt: new Date().toISOString() };
         const encrypted = encryptIdentity(updated, kemPubKey, sigKp.secretKey, keychain.deviceId);
         await saveEncryptedIdentity(encrypted);
+        await enqueueUpdate(encrypted);
 
         return { success: true, data: updated };
     } catch (e) {
@@ -756,6 +879,8 @@ async function handleUpdateIdentity(payload: { identity: Identity }): Promise<Me
 async function handleDeleteIdentity(payload: { id: string }): Promise<MessageResponse> {
     try {
         await deleteEncryptedIdentity(payload.id);
+        // The tombstone is what tells other devices to drop their copy.
+        await enqueueDelete(payload.id);
         return { success: true };
     } catch (e) {
         return { success: false, error: (e as Error).message };
@@ -1024,22 +1149,22 @@ async function handleFindLoginForSave(payload: {
         if (!kemSecretKey || !sigKp) return { success: true, data: { status: 'locked' } };
 
         const username = payload.username.trim().toLowerCase();
+        let candidateUpdateItem: { id: string } | null = null;
 
         for (const enc of await getEncryptedItems()) {
             if (enc.deletedAt || enc.envelope.itemType !== 'login') continue;
-            // Same registrable domain first (cheap, no decryption), then an
-            // exact host match on the stored domain or URL. Exact only: this
+            // Registrable-domain prefilter from cleartext metadata (cheap, no
+            // decryption), then an exact host match below. Exact only: this
             // answer decides which item an "update password" overwrites, and a
             // form on attacker.example.com must not be able to replace the
-            // password saved for example.com. Items store the full host, so the
-            // old equality with the registrable domain (`google.com` vs
-            // `accounts.google.com`) never matched and offered duplicates.
-            if (matchStrength(enc.envelope.metadata.domain || '', payload.url) === MATCH_NONE) continue;
+            // password saved for example.com.
+            const meta = enc.envelope.metadata;
+            if (matchStrength(meta.url || meta.domain || '', payload.url) === MATCH_NONE) continue;
 
             const item = openItem(enc, kemSecretKey, sigKp.publicKey);
             const login = item.data as LoginItem;
-            const exact = matchStrength(enc.envelope.metadata.domain || '', payload.url) === MATCH_EXACT
-                || (!!login.url && matchStrength(login.url, payload.url) === MATCH_EXACT);
+            const exact = [meta.url, meta.domain, login.url]
+                .some(v => !!v && matchStrength(v, payload.url) === MATCH_EXACT);
             if (!exact) continue;
 
             // An empty submitted identifier matches nothing: a password-only
@@ -1049,13 +1174,29 @@ async function handleFindLoginForSave(payload: {
                 .filter(Boolean);
             if (!username || !identifiers.includes(username)) continue;
 
+            // Same identifier and same password: already saved, nothing to ask.
+            if (login.password === payload.password) {
+                return {
+                    success: true,
+                    data: {
+                        status: 'existing',
+                        itemId: item.id,
+                        samePassword: true,
+                    },
+                };
+            }
+
+            // Same identifier, new password: candidate for the update prompt.
+            candidateUpdateItem = { id: item.id };
+        }
+
+        if (candidateUpdateItem) {
             return {
                 success: true,
                 data: {
                     status: 'existing',
-                    itemId: item.id,
-                    // Identical credentials mean there is nothing to ask about.
-                    samePassword: login.password === payload.password,
+                    itemId: candidateUpdateItem.id,
+                    samePassword: false,
                 },
             };
         }
@@ -1243,7 +1384,7 @@ async function handleBootstrapFromMasterPassword(payload: { password: string; pi
             await wrapAndStoreMasterKey(masterKey, payload.pin);
         }
         await localStore.set({ [ENROLLED_AT_KEY]: new Date().toISOString() });
-        resetLockTimer();
+        await resetLockTimer();
 
         return { success: true, data: { deviceId } };
     } catch (e) {
@@ -1301,12 +1442,30 @@ chrome.runtime.onMessage.addListener((message: Message, sender, sendResponse) =>
             case 'DOWNLOAD_RECOVERY_KIT':
                 response = await handleDownloadRecoveryKit(message.payload);
                 break;
+            case 'RESTORE_FROM_KIT':
+                response = await handleRestoreFromKit(message.payload);
+                break;
             case 'SYNC':
                 response = await handleSync();
                 break;
             case 'GET_PAGE_MATCHES':
                 response = await handleGetPageMatches(message.payload);
                 break;
+            case 'GET_ACTIVE_TAB': {
+                // Resolved here, avoiding internal extension/blank tabs.
+                let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+                let validTab = tabs.find(t => t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('moz-extension://') && !t.url.startsWith('about:'));
+                if (!validTab) {
+                    tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+                    validTab = tabs.find(t => t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('moz-extension://') && !t.url.startsWith('about:'));
+                }
+                if (!validTab) {
+                    tabs = await chrome.tabs.query({ active: true });
+                    validTab = tabs.find(t => t.url && !t.url.startsWith('chrome-extension://') && !t.url.startsWith('moz-extension://') && !t.url.startsWith('about:'));
+                }
+                response = { success: true, data: validTab?.url ? { id: validTab.id, url: validTab.url } : null };
+                break;
+            }
             case 'OPEN_POPUP_CREATE':
                 await openVaultTab('?action=create&url=' + encodeURIComponent(message.payload?.url || ''));
                 response = { success: true };

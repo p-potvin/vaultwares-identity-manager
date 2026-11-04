@@ -262,6 +262,10 @@ export async function getAssertion(
  * Picks the credential to assert with. `allowCredentials` narrows to a specific
  * set; an empty list is a discoverable-credential request, so any credential
  * for the rpId qualifies.
+ *
+ * Credential IDs are compared as decoded bytes: Proton-exported passkeys store
+ * them as standard base64 while descriptors arrive base64url, and the two
+ * encodings of the same ID must match.
  */
 export function selectCredential(
     options: SerializedRequestOptions,
@@ -270,6 +274,11 @@ export function selectCredential(
     const allowed = options.allowCredentials ?? [];
     if (allowed.length === 0) return available[0] ?? null;
 
-    const allowedIds = new Set(allowed.map(c => c.id));
-    return available.find(c => allowedIds.has(c.credentialId)) ?? null;
+    const allowedBytes = allowed.map(c => base64urlToBytes(c.id));
+    const sameId = (candidate: StoredCredential): boolean => {
+        const candidateBytes = base64urlToBytes(candidate.credentialId);
+        return allowedBytes.some(bytes =>
+            bytes.length === candidateBytes.length && bytes.every((b, i) => b === candidateBytes[i]));
+    };
+    return available.find(sameId) ?? null;
 }

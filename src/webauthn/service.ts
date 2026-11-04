@@ -76,13 +76,24 @@ function toStoredCredential(record: PasskeyRecord): StoredCredential {
  * Records typed in by hand before v2.1 have no usable PKCS#8 private key, so
  * they are excluded — offering them would produce a signature the relying party
  * rejects, with no way for the user to tell why.
+ *
+ * A credential saved for a parent domain (Proton exports often carry the
+ * registrable domain, e.g. `example.com`) is usable on its subdomains, which is
+ * what the RP ID policy permits for a page under that domain.
  */
 async function usableCredentials(vault: VaultAccess, rpId: string): Promise<PasskeyRecord[]> {
     const all = await vault.listPasskeys();
     return all.filter(record =>
-        record.passkey.rpId.toLowerCase() === rpId.toLowerCase()
-        && !!record.passkey.privateKey
-        && record.passkey.createdByAuthenticator !== false);
+        !!record.passkey.privateKey
+        && record.passkey.createdByAuthenticator !== false
+        && rpIdMatchesCredential(rpId, record.passkey.rpId));
+}
+
+function rpIdMatchesCredential(rpId: string, credentialRpId: string): boolean {
+    const target = rpId.toLowerCase();
+    const stored = credentialRpId.toLowerCase();
+    if (target === stored) return true;
+    return target.endsWith(`.${stored}`) || stored.endsWith(`.${target}`);
 }
 
 /* ----------------------------------------------------------------- prepare */

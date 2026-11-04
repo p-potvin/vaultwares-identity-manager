@@ -29,8 +29,10 @@ ck('registrable domain for qc.ca', d.getRegistrableDomain('https://a.vaultwares.
 
 ck('exact host beats parent', d.matchStrength('mail.example.com','https://mail.example.com/x') === d.MATCH_EXACT);
 ck('parent domain matches subdomain page', d.matchStrength('example.com','https://mail.example.com') === d.MATCH_PARENT);
-ck('sibling subdomain is only RELATED', d.matchStrength('mail.example.com','https://dev.example.com') === d.MATCH_RELATED);
-ck('exact ranks above related', d.MATCH_EXACT > d.MATCH_RELATED);
+ck('specified subdomain does not match sibling subdomain', d.matchStrength('mail.example.com','https://dev.example.com') === d.MATCH_NONE);
+ck('specified subdomain does not match parent domain', d.matchStrength('mail.example.com','https://example.com') === d.MATCH_NONE);
+ck('child of specified subdomain matches', d.matchStrength('mail.example.com','https://api.mail.example.com') === d.MATCH_PARENT);
+ck('exact ranks above parent', d.MATCH_EXACT > d.MATCH_PARENT);
 ck('different site does not match', d.matchStrength('example.com','https://evil.com') === d.MATCH_NONE);
 ck('suffix trick rejected', d.matchStrength('example.com','https://notexample.com') === d.MATCH_NONE, String(d.matchStrength('example.com','https://notexample.com')));
 ck('www ignored on both sides', d.matchStrength('www.example.com','https://example.com') === d.MATCH_EXACT);

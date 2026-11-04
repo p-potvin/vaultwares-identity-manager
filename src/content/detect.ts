@@ -52,7 +52,39 @@ export interface DetectedForm {
 }
 
 const FILLABLE_SELECTOR =
-    'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=checkbox]):not([type=radio]):not([type=file]):not([type=image]):not([type=range]):not([type=color])';
+    'input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=reset]):not([type=checkbox]):not([type=radio]):not([type=file]):not([type=image]):not([type=range]):not([type=color]):not([type=search])';
+
+export function isSearchOrNonAuthField(input: HTMLInputElement): boolean {
+    const type = (input.type || '').toLowerCase();
+    if (type === 'search' || type === 'number' || type === 'date' || type === 'time' || type === 'datetime-local') {
+        return true;
+    }
+    if (input.readOnly || input.disabled) return true;
+
+    const role = (input.getAttribute('role') || '').toLowerCase();
+    if (role === 'searchbox') return true;
+
+    if (input.closest && input.closest('[role="search"], form[role="search"]')) return true;
+
+    const hints = [
+        input.name,
+        input.id,
+        input.getAttribute('placeholder') ?? '',
+        input.getAttribute('aria-label') ?? '',
+        input.className,
+    ].join(' ').toLowerCase();
+
+    if (/(?:^|[^a-z0-9])(?:search|query|filter|keyword|find|browse)(?:[^a-z0-9]|$)/i.test(hints)) {
+        return true;
+    }
+
+    const name = input.name ? input.name.toLowerCase() : '';
+    if (name === 'q' || name === 's') {
+        return true;
+    }
+
+    return false;
+}
 
 /* ------------------------------------------------------------- traversal */
 
@@ -161,6 +193,10 @@ const AUTOCOMPLETE_ROLES: Record<string, FieldRole> = {
 };
 
 export function detectFieldRole(input: HTMLInputElement): DetectedField {
+    if (isSearchOrNonAuthField(input)) {
+        return { element: input, role: 'unknown', confidence: 0 };
+    }
+
     const autocomplete = (input.getAttribute('autocomplete') ?? '')
         .toLowerCase()
         .split(/\s+/)
@@ -298,7 +334,12 @@ function classify(fields: DetectedField[]): { kind: FormKind; score: number } {
     }
     // Identifier-only step: the "enter your email, then password" pattern.
     if (hasIdentifier && fields.length <= 3) {
-        return { kind: 'login', score: 55 };
+        const hasAuthIdentifier = fields.some(
+            f => (f.role === 'username' || f.role === 'email') && !isSearchOrNonAuthField(f.element)
+        );
+        if (hasAuthIdentifier) {
+            return { kind: 'login', score: 55 };
+        }
     }
     if (hasCard) {
         return { kind: 'payment', score: 70 };
@@ -327,6 +368,7 @@ export function detectForms(root: ParentNode = document): DetectedForm[] {
         // even when the site labels it nothing useful.
         for (let i = 0; i < fields.length; i++) {
             if (fields[i].role !== 'unknown') continue;
+            if (isSearchOrNonAuthField(fields[i].element)) continue;
             const next = fields[i + 1];
             if (next && (next.role === 'password' || next.role === 'newPassword')) {
                 fields[i] = { ...fields[i], role: 'username', confidence: 50 };

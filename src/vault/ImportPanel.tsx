@@ -1,8 +1,9 @@
 import React, { useRef, useState } from 'react';
-import { Upload, AlertCircle, Check, Loader2, FileText, X } from 'lucide-react';
-import { parseImportFile, markDuplicates, type ImportCandidate, type ParsedImport } from '../utils/import';
+import { Upload, Download, AlertCircle, Check, Loader2, FileText, X } from 'lucide-react';
+import { parseImportInput, markDuplicates, type ImportCandidate, type ParsedImport } from '../utils/import';
+import { downloadVaultCsv } from '../utils/export';
 import { loginIdentifier } from '../types';
-import type { LoginItem, VaultItem } from '../types';
+import type { LoginItem, CardItem, AddressItem, PasskeyItem, VaultItem } from '../types';
 
 /**
  * Import from another password manager.
@@ -41,8 +42,8 @@ export function ImportPanel({ existingItems, onImported }: {
         setError('');
         setImported(null);
         try {
-            const text = await file.text();
-            const result = parseImportFile(file.name, text);
+            const buffer = await file.arrayBuffer();
+            const result = await parseImportInput(file.name, buffer);
             const marked = markDuplicates(result.candidates, existingItems);
 
             setParsed(result);
@@ -98,29 +99,53 @@ export function ImportPanel({ existingItems, onImported }: {
     };
 
     const describe = (candidate: ImportCandidate): string => {
-        if (candidate.itemType !== 'login') return candidate.itemType;
-        const login = candidate.data as LoginItem;
-        return [loginIdentifier(login), login.url].filter(Boolean).join(' · ') || '—';
+        switch (candidate.itemType) {
+            case 'login': {
+                const login = candidate.data as LoginItem;
+                return [loginIdentifier(login), login.url].filter(Boolean).join(' · ') || '—';
+            }
+            case 'card': {
+                const card = candidate.data as CardItem;
+                return [card.holderName, card.cardNumber ? `•••• ${card.cardNumber.slice(-4)}` : ''].filter(Boolean).join(' · ') || '—';
+            }
+            case 'address': {
+                const addr = candidate.data as AddressItem;
+                return [addr.fullName, addr.city, addr.country].filter(Boolean).join(' · ') || '—';
+            }
+            case 'passkey': {
+                const pk = candidate.data as PasskeyItem;
+                return [pk.userDisplayName || pk.userName, pk.rpId].filter(Boolean).join(' · ') || '—';
+            }
+            default:
+                return candidate.itemType;
+        }
     };
 
     return (
         <div className="vw-card p-5">
             <div className="flex items-center gap-2 mb-1">
                 <Upload className="w-4 h-4 text-vw-gold" />
-                <h3 className="text-sm font-semibold text-white">Import</h3>
+                <h3 className="text-sm font-semibold text-white">Import & Export</h3>
             </div>
             <p className="text-xs text-vw-console-text-secondary mb-4">
-                Proton Pass (.json) · Bitwarden · Chrome · LastPass · 1Password (.csv).
+                Proton Pass (.zip / .json / .csv) · Bitwarden · Chrome · LastPass · 1Password (.csv).
                 Parsed on this device — the file is never uploaded.
             </p>
 
             <input
                 ref={fileInput}
                 type="file"
-                accept=".json,.csv,.tsv,.txt"
+                accept=".zip,.json,.csv,.tsv,.txt"
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) void handleFile(f); }}
                 className="block w-full text-xs text-vw-console-text-secondary file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-vw-gold file:text-vw-console-bg hover:file:bg-[#C69431] file:cursor-pointer"
             />
+
+            <button
+                onClick={() => downloadVaultCsv(existingItems)}
+                className="w-full mt-3 py-2 border border-vw-console-border rounded-lg text-xs text-vw-console-text-secondary hover:text-white hover:border-vw-gold/30 flex items-center justify-center gap-2"
+            >
+                <Download className="w-3.5 h-3.5" /> Export vault to CSV
+            </button>
 
             {error && (
                 <div className="flex items-start gap-2 mt-3 px-3 py-2 rounded-lg border border-vw-signal-alert/40 bg-vw-signal-alert/10 text-xs text-vw-signal-alert">

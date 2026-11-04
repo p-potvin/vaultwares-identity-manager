@@ -82,6 +82,8 @@ export type VaultItemData = LoginItem | AddressItem | CardItem | TotpItem | Pass
 export interface VaultItemMetadata {
     label: string;
     domain?: string;
+    /** Normalized stored URL, kept in the clear so page matching can rank without decrypting. */
+    url?: string;
     iconRef?: string;
     tags: string[];
     favorite: boolean;

@@ -145,12 +145,21 @@ export function matchStrength(stored: string, pageUrl: string): number {
     const pageHost = getHost(pageUrl);
     if (!storedHost || !pageHost) return MATCH_NONE;
 
+    const storedRegistrable = getRegistrableDomain(storedHost);
+
+    // If a subdomain is specified in the stored host, only show it if it fits the URL
+    // (exact host match or page is a deeper subdomain under it).
+    const specifiesSubdomain = Boolean(storedRegistrable && storedHost !== storedRegistrable);
+    if (specifiesSubdomain) {
+        if (storedHost === pageHost) return MATCH_EXACT;
+        if (pageHost.endsWith(`.${storedHost}`)) return MATCH_PARENT;
+        return MATCH_NONE;
+    }
+
+    // If no subdomain is specified: show it if it fits the URL
+    // (exact host match or any subdomain under it).
     if (storedHost === pageHost) return MATCH_EXACT;
     if (pageHost.endsWith(`.${storedHost}`)) return MATCH_PARENT;
-
-    const storedRegistrable = getRegistrableDomain(storedHost);
-    const pageRegistrable = getRegistrableDomain(pageHost);
-    if (storedRegistrable && storedRegistrable === pageRegistrable) return MATCH_RELATED;
 
     return MATCH_NONE;
 }

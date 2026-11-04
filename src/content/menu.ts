@@ -13,6 +13,7 @@ export interface MenuEntry {
     id: string;
     label: string;
     sublabel: string;
+    url?: string;
     /** Shown as a chip; used for passkey entries. */
     badge?: string;
     group?: string;
@@ -63,6 +64,8 @@ function styleSheet(): string {
             max-width: 380px;
             max-height: 320px;
             overflow-y: auto;
+            overflow-x: hidden;
+            box-sizing: border-box;
             background: ${TOKENS.consoleSurface};
             border: 1px solid ${TOKENS.consoleBorderSubtle};
             border-radius: ${TOKENS.radiusMd};
@@ -94,6 +97,7 @@ function styleSheet(): string {
             text-align: left;
             padding: 9px 10px;
             border-radius: ${TOKENS.radiusSm};
+            box-sizing: border-box;
         }
         .entry:hover, .entry[data-active="true"] { background: ${TOKENS.consoleRaised}; }
         .icon {
@@ -104,17 +108,27 @@ function styleSheet(): string {
             font-size: 12px; font-weight: 700; color: ${TOKENS.gold};
         }
         .entry[data-active="true"] .icon { background: ${TOKENS.consoleElevated}; }
-        .text { flex: 1; min-width: 0; }
-        /* Spans, so they need display:block to stack; without it the
-           subtitle ran into the title on one line. */
-        .label, .sublabel { display: block; }
+        .text {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
         .label {
             font-size: 13px; font-weight: 500; color: ${TOKENS.consoleTextStrong};
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            display: block;
         }
         .sublabel {
             font-size: 11px; color: ${TOKENS.consoleTextSecondary};
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            display: block;
+        }
+        .url {
+            font-size: 10px; color: ${TOKENS.consoleTextMuted};
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            display: block;
         }
         .badge {
             flex-shrink: 0;
@@ -293,6 +307,13 @@ export function showMenu(options: MenuOptions): void {
             sublabel.className = 'sublabel';
             sublabel.textContent = entry.sublabel;
             text.append(label, sublabel);
+
+            if (entry.url) {
+                const url = document.createElement('span');
+                url.className = 'url';
+                url.textContent = entry.url;
+                text.appendChild(url);
+            }
 
             button.append(icon, text);
 

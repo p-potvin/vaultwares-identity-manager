@@ -1,4 +1,5 @@
 import { getEncryptedItems, getSyncCursor, setSyncCursor, replaceAllEncryptedItems } from '../utils/storage';
+import { getEncryptedIdentities, replaceAllEncryptedIdentities } from '../utils/identity-storage';
 import { pushChanges, pullChanges } from '../api/sync';
 import type { EncryptedVaultItem } from '../types';
 import { localStore } from '../platform/store';
@@ -143,9 +144,15 @@ export async function fullSync(
         const localItems = storedItems.filter(isOurs);
         const droppedLocally = storedItems.length - localItems.length;
 
+        // Identities ride the same batch protocol: the server stores envelopes
+        // verbatim keyed by client id and cannot tell an identity from a login.
+        const storedIdentities = await getEncryptedIdentities();
+        const localIdentities = storedIdentities.filter(isOurs);
+        const droppedIdentities = storedIdentities.length - localIdentities.length;
+
         const cursor = await getSyncCursor();
 
-        const pushPayload = [...localItems, ...extraDeletes];
+        const pushPayload = [...localItems, ...localIdentities, ...extraDeletes];
         const pushResp = await pushChanges(pushPayload, cursor);
         await setSyncCursor(pushResp.cursor);
 
@@ -153,12 +160,18 @@ export async function fullSync(
         await setSyncCursor(pullResp.cursor);
 
         const merged = [...localItems];
+        const mergedIdentities = [...localIdentities];
         let foreignFromServer = 0;
         for (const remoteItem of pullResp.items ?? []) {
-            const idx = merged.findIndex(i => i.id === remoteItem.id);
+            // Route by what the envelope says it is. Identity envelopes are
+            // structurally identical and signed the same way, so the same
+            // ownership and merge rules apply — only the storage differs.
+            const isIdentity = remoteItem.envelope?.itemType === 'identity';
+            const target = isIdentity ? mergedIdentities : merged;
+            const idx = target.findIndex(i => i.id === remoteItem.id);
             if (remoteItem.deletedAt) {
                 // Remote tombstone wins — drop it locally.
-                if (idx >= 0) merged.splice(idx, 1);
+                if (idx >= 0) target.splice(idx, 1);
                 continue;
             }
             if (!isOurs(remoteItem)) {
@@ -167,22 +180,23 @@ export async function fullSync(
             }
             if (idx >= 0) {
                 const remoteUpdated = new Date(remoteItem.envelope.updatedAt).getTime();
-                const localUpdated = new Date(merged[idx].envelope.updatedAt).getTime();
+                const localUpdated = new Date(target[idx].envelope.updatedAt).getTime();
                 if (remoteUpdated > localUpdated) {
-                    merged[idx] = remoteItem;
+                    target[idx] = remoteItem;
                 }
             } else {
-                merged.push(remoteItem);
+                target.push(remoteItem);
             }
         }
 
         // Rewrites storage even when nothing came down, so items dropped above
         // stop being re-read and re-pushed forever.
         await replaceAllEncryptedItems(merged);
+        await replaceAllEncryptedIdentities(mergedIdentities);
         return {
             pushed: pushPayload.length,
             pulled: pullResp.items.length,
-            foreign: droppedLocally + foreignFromServer,
+            foreign: droppedLocally + droppedIdentities + foreignFromServer,
             ok: true,
         };
     } catch (e) {

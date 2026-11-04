@@ -116,6 +116,10 @@ export async function openVault(
     const unreadable: { id: string; reason: string }[] = [];
     for (const encrypted of pulled.items ?? []) {
         if (encrypted.deletedAt) continue;
+        // Personas sync through the same channel now; the read-only vault has
+        // no surface for them yet, so they are skipped rather than rendered
+        // as an item type the list does not understand.
+        if (encrypted.envelope?.itemType === 'identity') continue;
         try {
             items.push(openEnvelope(encrypted, kemSecretKey, sigPublicKey));
         } catch (e) {
